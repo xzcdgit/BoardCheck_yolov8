@@ -1,12 +1,14 @@
 import sys
+import os
 from configparser import ConfigParser
 import time
+import cv2
 import logging
 import ctypes
 from PyQt5.QtWidgets import QApplication, QMainWindow
 from PyQt5.QtGui import QPixmap
 from Ui_Main import Ui_MainWindow
-from MyThreaing import FrameGetThread
+from MyThreaing import AiDealThreading
 import Modbus
 
 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("myappid")
@@ -20,46 +22,55 @@ class MyApp(QMainWindow, Ui_MainWindow):
         self.setupUi(self)  
         # 获取预设参数
         conf = ConfigParser()
-        res = conf.read('config.ini')
+        res = conf.read(os.path.dirname(os.path.abspath(__file__)) +r'\config.ini', encoding='utf-8')
+        self.img = None
+        self.ori_img = None
         # 相机通讯参数
         camera_ip = conf['camera_info']['ip']
         camera_port = int(conf['camera_info']['port'])
         camera_user_name = conf['camera_info']['user_name']
         camera_password = conf['camera_info']['password']
+        # 通用参数
+        img_save_folder_path = conf['common_info']['img_save_folder_path']
         # 模型文件地址
         module_path = conf['module_info']['path']
         # io模块通讯参数
         io_module_ip = conf['io_module_info']['ip']
         io_module_port = int(conf['io_module_info']['port'])
         io_module_timeout = float(conf['io_module_info']['timeout'])
+        # 图像记录文件地址
+        self.img_save_folder_path = img_save_folder_path
 
-        self.init_frame_class(camera_ip, camera_port, camera_user_name, camera_password, module_path)  # 图像获取类初始化
-        self.connect_ui_signal()  # 连接ui信号
-        self.is_run = False #分析运行信号
-        self.last_update_time = time.time()  # 上次数据更新时间
+        #标识符设置
+        self.is_run = False #分析运行信号 防止重复运行ai分析线程
+        self.last_update_time = 0  # 上次数据更新时间
         self.fps = 0  # fps记录
-        self.person_last_time = time.time()  # 最近一次出现人体的时间
-        self.arcligth_last_time = time.time()  # 最近一次出现弧光的时间
-        self.is_lock = False  # 异常锁定标识符
-        self.unlock_time_stamp = time.time()  # 锁定结束时间戳
-        self.lock_time = 10  # 锁定时长
+        self.stack_last_time = 0  # 最近一次出现叠板的时间
+        self.handle_check_last_time = 0  # 最近一次出现人工检测的时间
         self.last_output_type = False
-        self.last_output_time = time.time()
-        self.last_exist_person_info = {"min_distance": 500}
+        self.last_output_time = 0
 
+        # 设置modbus模块
         self.modbus_controller = Modbus.ModbusTcpClientClass(io_module_ip, io_module_port, io_module_timeout)
+
+        # 设置图像Ai分析线程
+        self.ai_deal_thread = AiDealThreading(camera_ip, camera_port, camera_user_name, camera_password, module_path)
+
+        # 连接ui信号
+        self.connect_ui_signal()
+
+        #log文件参数设置
         self.init_log()
 
-    # 图像线程设置
-    def init_frame_class(self, camera_ip:str, camera_port:int, camera_user_name:str, camera_password:str, module_path:str):
-        self.recall_img = FrameGetThread(camera_ip, camera_port, camera_user_name, camera_password, module_path)
-        #self.recall_img = FrameGetThread("10.70.37.10", 8000, "admin", "13860368866xzc", r"D:\Code\Python\HumanDetection_yolov8\best_s.pt")
-        self.recall_img.imgSignal.connect(self.recall_show_img)
-        self.recall_img.infoSignal.connect(self.recall_show_info)
+        #自启动设置
+        if self.is_run == False:
+            self.ai_deal_thread.start()
+            self.is_run = True
+            self.showMaximized()
+
 
     # 日志模块初始化
     def init_log(self):
-
         logger = logging.getLogger(__name__)
         logger.setLevel(level=logging.INFO)
         handler = logging.FileHandler("log.txt")
@@ -74,28 +85,34 @@ class MyApp(QMainWindow, Ui_MainWindow):
     def connect_ui_signal(self):
         self.pushButton.clicked.connect(self.start_img_thread)  # 设置图像显示线程
         self.pushButton_2.clicked.connect(self.quit_img_thread)  # 退出图像显示线程
+        self.ai_deal_thread.imgSignal.connect(self.recall_show_img) 
+        self.ai_deal_thread.infoSignal.connect(self.recall_show_info)
+        self.ai_deal_thread.finishSignal.connect(self.recall_quit_info)
+
 
     # 启动取图线程
     def start_img_thread(self):
         if self.is_run == False:
-            self.recall_img.start()
+            self.ai_deal_thread.start()
             self.is_run = True
 
     def quit_img_thread(self):
-        self.recall_img.quit_thread()
+        self.ai_deal_thread.quit_thread()
         self.is_run = False
 
     # 图像回调
-    def recall_show_img(self, pix):
-        if pix is not None:
-            self.label.setPixmap(QPixmap(pix))
+    def recall_show_img(self, pixs):
+        if pixs[0] is not None:
+            self.label.setPixmap(QPixmap(pixs[0]))
             self.label.setScaledContents(True)
+            self.img = pixs[0]
+        if pixs[1] is not None:
+            self.ori_img = pixs[1]
 
     # 判定信息回调
     def recall_show_info(self, infos: dict):
-        is_person = False
-        is_arclight = False
         current_time = time.time() # 当前时间记录
+
         # 帧率显示
         el_time = current_time - self.last_update_time
         if el_time:
@@ -104,67 +121,87 @@ class MyApp(QMainWindow, Ui_MainWindow):
             fps = 0
         self.label_2.setText("{:.1f}".format(fps))
         self.last_update_time = current_time
-        # Ai人体检测判定
-        # 人员存在
-        if infos["exist_person"]:
-            is_person = True
-            self.person_last_time = time.time()
+
+        # 堆叠判定
+        if infos["is_stack"]:
+            self.stack_last_time = time.time()
             self.label_3.setText("是")
             self.label_3.setStyleSheet("color: white; background-color: Red ")
-            self.last_exist_person_info = infos  # 记录最近一次有人的帧信息
-        else:  # 本帧图像无人
-            # 判定人员是否从图像边界消失(根据最后一帧有人图像的轴)
-            if (
-                self.last_exist_person_info["min_distance"] < 500
-                and self.is_lock == False
-            ):  # 非边界消失并且未锁定，锁定按键x秒
-                print("目标失踪！")
-                self.unlock_time_stamp = (
-                    time.time() + self.lock_time
-                )  # 设置锁定结束时间
-                self.is_lock = True  # 修改锁定标识符
-            # 人员正常离开图像边界，人员存在信号会存续0.5秒，设置is_person信号
-            elif self.is_lock == False and current_time - self.person_last_time > 0.5:
-                is_person = False
-                self.label_3.setText("否")
-                self.label_3.setStyleSheet("color: white; background-color: Green ")
-            # 如果已经锁定且当前时间大于锁定截至时间则解锁
-            elif current_time > self.unlock_time_stamp:
-                self.is_lock = False  # 解锁
-        # 弧光存在判定
-        if infos["exist_arclights"]:
-            is_arclight = True
-            self.arcligth_last_time = time.time()
+            is_stack = True
+        else:
+            self.label_3.setText("否")
+            self.label_3.setStyleSheet("color: white; background-color: Green ")
+            is_stack = False
+
+        # 人工检板判定
+        is_handle_check = infos["is_handle_check"]
+        if is_handle_check:
+            self.handle_check_last_time = time.time()
             self.label_6.setText("是")
             self.label_6.setStyleSheet("color: white; background-color: Red ")
-        # 弧光存在信号会延续x秒
-        elif current_time - self.arcligth_last_time > 1:
-            is_arclight = False
+        else:
+            self.handle_check_last_time = time.time()
             self.label_6.setText("否")
             self.label_6.setStyleSheet("color: white; background-color: Green ")
-        is_out = is_arclight or is_person
+
         # 调试信息输出
         self.statusbar.showMessage(
-            "测试信息 人员检定框数：{} 弧光检定框数：{} 最小距离：{:.1f}  判定结果：{}".format(
-                infos["person_num"],
-                infos["arclight_num"],
-                infos["min_distance"],
-                is_out,
+            "测试信息 板宽：{:.1f}px  板高：{:.1f}px  人工检板：{}  堆叠判定：{}".format(
+                infos["board_width"],
+                infos["board_height"],
+                infos["is_handle_check"],
+                infos["is_stack"],
             )
         )
-        # 输出信号变化或者是距离上次更新信号的时间过去了1s
-        if is_out != self.last_output_type or current_time - self.last_output_time > 1:
+        #信号输出
+        if is_stack or (current_time - self.stack_last_time < 5):
+            is_out = True
+            self.label_7.setText("是")
+            self.label_7.setStyleSheet("color: white; background-color: Red ")
+        else:
+            is_out = False
+            self.label_7.setText("否")
+            self.label_7.setStyleSheet("color: white; background-color: Green ")
+            
+        # 输出信号变化或者是距离上次更新信号的时间过去了1s 向plc下达一次指令并保存图像
+        if (is_out != self.last_output_type) or (current_time - self.last_output_time) > 1:
             self.last_output_time = current_time
             # 存在信号判定输出
-            # print("is_out: {}".format(is_out))
-            #self.modbus_controller.write_single_coil(1, is_out)
-            res = self.modbus_controller.write_holding_register(0, is_out+10)
+            res = self.modbus_controller.write_holding_register(5, is_out+10)
             if not res: print("modbus communication error")
-        # 输出信号变化日志记录
+            file_name_attach = "common_"+str(is_stack)+"_"
+            self.img_save(self.img, self.ori_img, self.img_save_folder_path, file_name_attach)
+
+        # 输出信号变化日志记录 只有信号变化时记录日志
         if is_out != self.last_output_type:
             self.last_output_type = is_out
-            self.logger.info("existent personnel " + str(is_out))
+            self.logger.info("is_out " + str(is_out))
+            file_name_attach = "change_"+str(is_stack)+"_"
+            self.img_save(self.img, self.ori_img, self.img_save_folder_path, file_name_attach)
 
+    # 退出信息回调
+    def recall_quit_info(self, quit_info: tuple):
+        if quit_info != 0:
+            print(quit_info)
+        else:
+            print(quit_info)
+
+    #图像记录
+    def img_save(self, img, ori_img, folder_path:str, file_name_attach:str = "", max_num:int = 60000):
+        files = os.listdir(folder_path)
+        full_path = folder_path + "\\" + file_name_attach + str(int(time.time()*1000))+".jpg"
+        ori_full_path = folder_path + "\\" + file_name_attach + str(int(time.time()*1000))+"_ori.jpg"
+        img_num = len(files)
+        #保存图像
+        if img is not None:
+            #是否清理图片
+            if img_num > max_num:
+                for index, file in enumerate(files):
+                    os.remove(folder_path + "\\" + file)
+                    if index>max_num*0.1:
+                        break
+            img.save(full_path,"jpg", 100)
+            cv2.imwrite(ori_full_path,ori_img)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

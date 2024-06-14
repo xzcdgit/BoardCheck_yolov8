@@ -30,7 +30,6 @@ class ModbusRtuClientClass:
         self.master.set_verbose(True)
 
     def write_single_coil(self, slave=1, output_index: int = -1, output_val: int = 0):
-        # res = self.master.execute(1, cst.WRITE_SINGLE_COIL, 3, output_value=1)
         res = 0
         try:
             if self.master.isinstance():
@@ -48,6 +47,7 @@ class ModbusTcpClientClass:
     ) -> None:
         self.count_reconnect_try = 0
         self.count_reconnect_limit = 3
+        self.is_connect = False
         self.host = host
         self.port = port
         self.master = modbus_tcp.TcpMaster(self.host, self.port, timeout)
@@ -55,6 +55,9 @@ class ModbusTcpClientClass:
         print("connected")
 
     def write_single_coil(self, output_index: int = -1, output_val: int = 0):
+        if not self.is_connect:
+            return False
+
         if self.count_reconnect_try > self.count_reconnect_limit:
             return False
         try:
@@ -67,6 +70,9 @@ class ModbusTcpClientClass:
             return False
         
     def write_holding_register(self, address:int, val:int):
+        if not self.is_connect:
+            return False
+        
         if self.count_reconnect_try > self.count_reconnect_limit:
             return False
         try:
@@ -80,8 +86,12 @@ class ModbusTcpClientClass:
 
     def reconnect(self):
         self.count_reconnect_try += 1
-        self.master = modbus_tcp.TcpMaster(self.host, self.port, timeout_in_sec=0.2)
-        return True
+        try:
+            self.master = modbus_tcp.TcpMaster(self.host, self.port, timeout_in_sec=0.2)
+            return True
+        except Exception as e:
+            print(e)
+            return False
 
     def close(self):
         self.count_reconnect_try = 0

@@ -1,6 +1,7 @@
 # coding=utf-8
 
 import os
+import sys
 import platform
 import tkinter
 import HCNetSDK
@@ -11,75 +12,13 @@ import queue
 import threading
 
 
-DLL_PATH_WIN = os.getcwd() + r"\lib\win"
-DLL_PATH_LINUX = os.getcwd() + r"\lib\linux"
-data_chane1 = queue.Queue(3)
-
-class YU12ToMat:
-
-    def __init__(self) -> None:
-        self.frame_buffer = []
-        self.USE_COLOR = 1
-
-    def add_frame(self, height, width, data):
-        if data_chane1.full():
-            cc = data_chane1.get()
-        res, img = self.read(height, width, data)
-        data_chane1.put(img)
-
-    def read(self, nHeight, nWidth, imgsrc, img_type=True):
-        if img_type:  # 彩色图像
-            pImgYUV = np.zeros(
-                (nHeight, nWidth, 3), dtype=np.uint8
-            )  # OpenCV 空图像对象
-            # print('shape of pImgYCrCb=', pImgYUV.shape)
-            self.yv12toYUV(pImgYUV, imgsrc)  # 得到全部YUV图像数据
-            pImgdst = cv2.cvtColor(pImgYUV, cv2.COLOR_YUV2RGB)  # 转为RGB图像对象
-            # pImgdst = cv2.cvtColor(imgsrc, cv2.COLOR_YUV2RGB_YV12)
-        else:  # 灰度图像
-            pImgYUV = np.zeros((nHeight, nWidth), dtype=np.uint8)  # OpenCV 空图像对象
-            self.yv12toYUV(pImgYUV, imgsrc)  # 得到图像的Y分量（灰度图像）
-            pImgdst = pImgYUV
-        # end if
-        # self.frame_buffer.clear()
-        return True, pImgdst
-
-    def yv12toYUV(self, outYuv: np.ndarray, inYv12: np.ndarray):
-        """
-        :param outYuv: 3 dimension ndarray
-        :param inYv12: 1 dimension ndarray
-        :return:
-        """
-        height = outYuv.shape[0]
-        width = outYuv.shape[1]
-        ndim = outYuv.ndim
-        # print("yv12toYUV: width=", width, "height=", height)
-
-        if ndim == 2:
-            # Y
-            outYuv[:, :] = inYv12[0 : width * height].reshape(height, -1)
-        elif ndim == 3:
-            # Y
-            outYuv[:, :, 0] = inYv12[0 : width * height].reshape(height, -1)
-            # U
-            tmp = inYv12[width * height : width * height + width * height // 4].reshape(
-                height // 2, -1
-            )
-            outYuv[:, :, 1][::2][:, ::2] = tmp
-            outYuv[:, :, 1][::2][:, 1::2] = tmp
-            outYuv[:, :, 1][1::2][:, ::2] = tmp
-            outYuv[:, :, 1][1::2][:, 1::2] = tmp
-            # V
-            tmp = inYv12[width * height + width * height // 4 :].reshape(
-                height // 2, -1
-            )
-            outYuv[:, :, 2][::2][:, ::2] = tmp
-            outYuv[:, :, 2][::2][:, 1::2] = tmp
-            outYuv[:, :, 2][1::2][:, ::2] = tmp
-            outYuv[:, :, 2][1::2][:, 1::2] = tmp
+DLL_PATH_WIN = os.path.dirname(os.path.abspath(__file__)) + r"\lib\win"
+DLL_PATH_LINUX = os.path.dirname(os.path.abspath(__file__)) + r"\lib\linux"
 
 
 class GetSdkStreaming:
+
+    data_chane1 = queue.Queue(2)
 
     # 全局参数初始化
     def __init__(
@@ -110,7 +49,6 @@ class GetSdkStreaming:
         self.lUserId = None
         self.device_info = None
 
-        self.myTest = YU12ToMat()
         self.init_sdk()
 
     def init_sdk(self):
@@ -174,7 +112,6 @@ class GetSdkStreaming:
             # 释放资源
             self.Objdll.NET_DVR_Cleanup()
             return 3
-
         self.preview_win.mainloop()
         # 关闭预览
         self.Objdll.NET_DVR_StopRealPlay(lRealPlayHandle)
@@ -269,7 +206,7 @@ class GetSdkStreaming:
     # 解码回调函数
     def DecCBFun(self, nPort, pBuf, nSize, pFrameInfo, nUser, nReserved2):
         if pFrameInfo.contents.nType == 3:
-            self.myTest.add_frame(
+            self.AddFrame(
                 pFrameInfo.contents.nHeight,
                 pFrameInfo.contents.nWidth,
                 np.frombuffer(pBuf[:nSize], np.uint8).copy(),
@@ -333,29 +270,64 @@ class GetSdkStreaming:
                 self.PlayCtrl_Port, pFileData, len(pFileData)
             ):
                 break
-    
+
+    def AddFrame(self, nHeight, nWidth, imgsrc, img_type=True):
+        if img_type:  # 彩色图像
+            pImgYUV = np.zeros(
+                (nHeight, nWidth, 3), dtype=np.uint8
+            )  # OpenCV 空图像对象
+            # print('shape of pImgYCrCb=', pImgYUV.shape)
+            self.yv12toYUV(pImgYUV, imgsrc)  # 得到全部YUV图像数据
+            pImgdst = cv2.cvtColor(pImgYUV, cv2.COLOR_YUV2RGB)  # 转为RGB图像对象
+            # pImgdst = cv2.cvtColor(imgsrc, cv2.COLOR_YUV2RGB_YV12)
+        else:  # 灰度图像
+            pImgYUV = np.zeros((nHeight, nWidth), dtype=np.uint8)  # OpenCV 空图像对象
+            self.yv12toYUV(pImgYUV, imgsrc)  # 得到图像的Y分量（灰度图像）
+            pImgdst = pImgYUV
+        # end if
+        if GetSdkStreaming.data_chane1.full():
+            cc = GetSdkStreaming.data_chane1.get()
+        GetSdkStreaming.data_chane1.put(pImgdst)
+
+    def yv12toYUV(self, outYuv: np.ndarray, inYv12: np.ndarray):
+        """
+        :param outYuv: 3 dimension ndarray
+        :param inYv12: 1 dimension ndarray
+        :return:
+        """
+        height = outYuv.shape[0]
+        width = outYuv.shape[1]
+        ndim = outYuv.ndim
+        # print("yv12toYUV: width=", width, "height=", height)
+
+        if ndim == 2:
+            # Y
+            outYuv[:, :] = inYv12[0 : width * height].reshape(height, -1)
+        elif ndim == 3:
+            # Y
+            outYuv[:, :, 0] = inYv12[0 : width * height].reshape(height, -1)
+            # U
+            tmp = inYv12[width * height : width * height + width * height // 4].reshape(
+                height // 2, -1
+            )
+            outYuv[:, :, 1][::2][:, ::2] = tmp
+            outYuv[:, :, 1][::2][:, 1::2] = tmp
+            outYuv[:, :, 1][1::2][:, ::2] = tmp
+            outYuv[:, :, 1][1::2][:, 1::2] = tmp
+            # V
+            tmp = inYv12[width * height + width * height // 4 :].reshape(
+                height // 2, -1
+            )
+            outYuv[:, :, 2][::2][:, ::2] = tmp
+            outYuv[:, :, 2][::2][:, 1::2] = tmp
+            outYuv[:, :, 2][1::2][:, ::2] = tmp
+            outYuv[:, :, 2][1::2][:, 1::2] = tmp
+
 
 def func(ip:str="10.70.37.10", port=8000, user_name:str="admin", password:str="13860368866xzc"):
     myDemo = GetSdkStreaming(ip, port, user_name, password)
     myDemo.run()
-    
-
-def start_thread(ip:str="10.70.37.10", port=8000, user_name:str="admin", password:str="13860368866xzc"):
-    t1 = threading.Thread(target=func, args=(ip, port, user_name, password))
-    t1.setDaemon(True)  # 主线程退出时强制退出子线程
-    t1.start()
-
+    print("func")
 
 if __name__ == "__main__":
-    transor = YU12ToMat()
-    t1 = threading.Thread(target=func)
-    t1.setDaemon(True)  # 主线程退出时强制退出子线程
-    t1.start()
-    while True:
-        if not data_chane1.empty():
-            img = data_chane1.get()
-            img = cv2.resize(img, (1300,1000))
-            cv2.imshow("test", img)
-        if cv2.waitKey(40) & 0xFF == ord("q"):
-            cv2.destroyAllWindows()
-            break
+    pass

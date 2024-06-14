@@ -1,26 +1,29 @@
 import time
+import os
 import cv2
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPainter
 import numpy as np
 import SdkGetStreaming
 from ultralytics import YOLO
+import threading
 
 
-class FrameGetThread(QThread):
-    finishSignal = pyqtSignal(str)
-    imgSignal = pyqtSignal(QImage)
+class AiDealThreading(QThread):
+    finishSignal = pyqtSignal(tuple)
+    imgSignal = pyqtSignal(tuple)
     infoSignal = pyqtSignal(dict)
 
-    def __init__(self, camera_ip:str, camera_port:int, camera_user_name:str, camera_password:str, model_path:str, parent=None) -> None:
-        super().__init__(parent)
-        self.painter = QPainter()
+    def __init__(self, camera_ip, camera_port, camera_user_name, camera_password, model_path:str) -> None:
+        super().__init__(None)
+
+        self.camera_ip = camera_ip
+        self.camera_port = camera_port
+        self.camera_user_name = camera_user_name
+        self.camera_password = camera_password
         self.model_path = model_path
-        self.img = None
         self.is_quit = False
-        
-        # sdk取图线程
-        SdkGetStreaming.start_thread(camera_ip, camera_port, camera_user_name, camera_password)
+        self.last_nonempty_time = time.time()+10 #加10是因为sdk取图初始化需要时间，而取图超时会判定异常
 
     def quit_thread(self):
         self.is_quit = True
@@ -28,30 +31,39 @@ class FrameGetThread(QThread):
     def run(self) -> None:
         self.run_sdk()
         #self.run_video()
+        #self.run_pic()
         
     def run_sdk(self) -> None:
         # 加载yolov8的神经网络模型
         self.model = YOLO(self.model_path)  # load a pretrained model (recommended for training)
+        # 启动sdk取图线程
+        sdk_streaming = threading.Thread(target=SdkGetStreaming.func, args=(self.camera_ip, self.camera_port, self.camera_user_name, self.camera_password))
+        sdk_streaming.setDaemon(True)  # 主线程退出时强制退出子线程
+        sdk_streaming.start()
         # 循环运算
         while self.is_quit == False:
             #如果队列中没有图像则直接继续
-            if not SdkGetStreaming.data_chane1.empty():
-                self.img = SdkGetStreaming.data_chane1.get()
+            if not SdkGetStreaming.GetSdkStreaming.data_chane1.empty():
+                self.last_nonempty_time = time.time()
+                img = SdkGetStreaming.GetSdkStreaming.data_chane1.get()
+            elif time.time()-self.last_nonempty_time>3:
+                self.finishSignal.emit((2,"sdk取图超时"))
+                break
             else:
                 time.sleep(0.01)
                 continue
-            img = self.img[:, 1100:-200]
             qimg, infos = self.ai_deal_Yolov8(img)
-            self.imgSignal.emit(qimg)
+            self.imgSignal.emit((qimg, img))
             self.infoSignal.emit(infos)
-            time.sleep(0.02)
+            time.sleep(0.01)
         self.is_quit = False
+        self.finishSignal.emit((0,"正常结束"))
     
     #测试用函数，检测视频
     def run_video(self) -> None:
         # 加载yolov8的神经网络模型
         self.model = YOLO(self.model_path)  # load a pretrained model (recommended for training)
-        video_path = r"C:\Users\ADMIN\Desktop\素材\通道人检\10.70.37.10_01_20240530141205550_1.mp4"
+        video_path = r"C:\Users\01477483\Desktop\堆叠检测现场录像\20240611.mp4"
         cap = cv2.VideoCapture(video_path)
         # 循环运算
         while self.is_quit == False:
@@ -60,42 +72,71 @@ class FrameGetThread(QThread):
                 cap = cv2.VideoCapture(video_path)
                 continue
             else:
-                self.img = frame
-            #如果队列中没有图像则直接继续
-            #if not SdkGetStreaming.data_chane1.empty():
-            #    self.img = SdkGetStreaming.data_chane1.get()
-            #else:
-            #    time.sleep(0.01)
-            #    continue
-            img = self.img
+                img = frame
             qimg, infos = self.ai_deal_Yolov8(img)
-            self.imgSignal.emit(qimg)
+            self.imgSignal.emit((qimg, img))
             self.infoSignal.emit(infos)
-            time.sleep(0.02)
+            time.sleep(0.01)
+        self.is_quit = False
+
+    def run_pic(self) -> None:
+        # 加载yolov8的神经网络模型
+        self.model = YOLO(self.model_path)  # load a pretrained model (recommended for training)
+        folder_path = r"C:\Users\01477483\Desktop\堆叠检测现场录像\special"
+        # 循环运算
+        while self.is_quit == False:
+            files = os.listdir(folder_path)
+            print(files)
+            for file in files:
+                if file[-4:] != ".jpg":
+                    continue
+                img = cv2.imread(folder_path + "\\" + file)
+                qimg, infos = self.ai_deal_Yolov8(img)
+                self.imgSignal.emit((qimg, img))
+                self.infoSignal.emit(infos)
+                time.sleep(0.01)
         self.is_quit = False
 
     def ai_deal_Yolov8(self, img) -> None:
-        #if img is None:
-        #    return None, {"person_num": -1, "exist_person": -1}
-        count_person = 0
-        count_arclights = 0
-        trans_distance = 999
+        is_stack = False
+        is_handle_check = False
+        board_width = -1
+        board_height = -1
+        stand_width = 1000
+        width_max = stand_width*1.2
+        width_min = stand_width*0.8
         results = self.model(img)
         #因为只传入了一张图所以results的长度只有1
         for result in results:
-            conf = result.boxes.conf.cpu().numpy()
-            cls = result.boxes.cls.cpu().numpy()
-            xywh = result.boxes.xywh.cpu().numpy()
-            count_person = np.sum(cls == 0)
-            count_arclights = np.sum(cls == 1)
+            conf = result.boxes.conf.cpu().numpy() #置信率
+            cls = result.boxes.cls.cpu().numpy() #标签号
+            xywhs = result.boxes.xywh.cpu().numpy()
+            xywhs = xywhs[np.argsort(xywhs[:,0])] #按x整体排序
+            box_num = len(xywhs)
+            for index,xywh in enumerate(xywhs):
+                left = xywh[0] - 0.5*xywh[2]
+                up = xywh[1] - 0.5*xywh[3]
+                if left > 750 and left <1400:
+                    theory_width = -0.48*left + 1787
+                    board_width = (xywh[2]/theory_width)*stand_width #加权再归一化计算
+                    board_height = xywh[3]
+                    #单板特征宽度判定(排除人工检测)
+                    # 板宽判定
+                    if (board_width > width_max or board_width<width_min) and up>120:
+                        is_stack = True
+                        
+                # 双板间距判定
+                if left > 750 and left < 1500:
+                        if index<box_num-1:
+                            #right = xywh[0] + 0.5*xywh[2]
+                            #next_left = xywhs[index+1][0] - 0.5*xywhs[index+1][2]
+                            #两板中心距离小于两板宽度和的一半
+                            if (abs(xywhs[index+1][0] - xywhs[index][0]) < 0.52*(xywhs[index+1][2] + xywhs[index][2])) and up>120:
+                                is_stack = True
+                #人工检板判定
+                if up<120:
+                    is_handle_check = True
             im_bgr = result.plot()
-            # 最近高度中心计算
-            center_ys = xywh[:,1]
-            # 加权计算，因为图像透视上方的图像距离需要放大
-            trans_distances = np.where(center_ys<600, (600-center_ys)*1.8, center_ys-600)
-            # 判定距离通道中心最近的识别框
-            if len(trans_distances)>0:
-                trans_distance = trans_distances.min()
         # 图像格式转换PIL.IMAGE转cv2图像
         img = np.asanyarray(im_bgr)
         # 图像格式转换 cv2图像转QImage
@@ -105,25 +146,14 @@ class FrameGetThread(QThread):
         cvimg = QImage(
             cvimg.data, width, height, width * depth, QImage.Format.Format_RGB888
         )
-        # 存在人员标识符
-        if count_person > 0:
-            exist_person = True
-        else:
-            exist_person = False
-        # 弧光存在标识符
-        if count_arclights > 0:
-            exist_arclights = True
-        else:
-            exist_arclights = False
         # 回传图像数据和判定结果
         ratio = 0.5  # 图片尺寸变换比例
         qimg = cvimg.scaled(int(cvimg.width() * ratio), int(cvimg.height() * ratio))
         infos = {
-            "person_num": count_person,
-            "exist_person": exist_person,
-            "arclight_num": count_arclights,
-            "exist_arclights": exist_arclights,
-            "min_distance": trans_distance,
+            "is_handle_check": is_handle_check,
+            "is_stack": is_stack,
+            "board_width": board_width,
+            "board_height": board_height
         }
         return qimg, infos
     
