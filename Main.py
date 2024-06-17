@@ -112,7 +112,6 @@ class MyApp(QMainWindow, Ui_MainWindow):
     # 判定信息回调
     def recall_show_info(self, infos: dict):
         current_time = time.time() # 当前时间记录
-
         # 帧率显示
         el_time = current_time - self.last_update_time
         if el_time:
@@ -187,7 +186,7 @@ class MyApp(QMainWindow, Ui_MainWindow):
             print(quit_info)
 
     #图像记录
-    def img_save(self, img, ori_img, folder_path:str, file_name_attach:str = "", max_num:int = 60000):
+    def img_save(self, img, ori_img, folder_path:str, file_name_attach:str = "", max_num:int = 50000):
         files = os.listdir(folder_path)
         full_path = folder_path + "\\" + file_name_attach + str(int(time.time()*1000))+".jpg"
         ori_full_path = folder_path + "\\" + file_name_attach + str(int(time.time()*1000))+"_ori.jpg"
@@ -198,7 +197,7 @@ class MyApp(QMainWindow, Ui_MainWindow):
             if img_num > max_num:
                 for index, file in enumerate(files):
                     os.remove(folder_path + "\\" + file)
-                    if index>max_num*0.1:
+                    if index>max_num*0.001:
                         break
             img.save(full_path,"jpg", 100)
             cv2.imwrite(ori_full_path,ori_img)

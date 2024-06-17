@@ -17,8 +17,7 @@ DLL_PATH_LINUX = os.path.dirname(os.path.abspath(__file__)) + r"\lib\linux"
 
 
 class GetSdkStreaming:
-
-    data_chane1 = queue.Queue(2)
+    data_chane1 = queue.Queue(3)
 
     # 全局参数初始化
     def __init__(
@@ -36,7 +35,6 @@ class GetSdkStreaming:
             bytes(user_name, encoding="utf8")
         )
         self.password = PlayCtrl.create_string_buffer(bytes(password, encoding="utf8"))
-
         self.is_windows = True  # 操作系统类型标识符
         self.preview_win = None  # 预览窗口
         self.pic_box = None  # 图片预览标签
