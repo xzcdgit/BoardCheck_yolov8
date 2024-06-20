@@ -1,7 +1,7 @@
 import time
 import cv2
 from PyQt5.QtCore import QThread, pyqtSignal
-from PyQt5.QtGui import QImage, QPainter
+from PyQt5.QtGui import QImage
 import numpy as np
 import SdkGetStreaming
 from ultralytics import YOLO
@@ -32,19 +32,23 @@ class AiDealThreading(QThread):
         #self.run_video()
         
     def run_sdk(self) -> None:
+        error_code = 0
+        error_dict = {0:"正常结束",2:"sdk取图超时"}
         # 加载yolov8的神经网络模型
         self.model = YOLO(self.model_path)  # load a pretrained model (recommended for training)
-        sdk_streaming = threading.Thread(target=SdkGetStreaming.func, args=(self.camera_ip, self.camera_port, self.camera_user_name, self.camera_password, ))
-        sdk_streaming.setDaemon(True)  # 主线程退出时强制退出子线程
-        sdk_streaming.start()
-        error_dict = {0:"正常结束", 2:"sdk取图超时"}
-        error_code = 0
+        #sdk_streaming = threading.Thread(target=SdkGetStreaming.func, args=(self.camera_ip, self.camera_port, self.camera_user_name, self.camera_password, ))
+        #sdk_streaming.setDaemon(True)  # 主线程退出时强制退出子线程
+        #sdk_streaming.start()
+        sdk_streaming = SdkGetStreaming.GetSdkStreaming(self.camera_ip, self.camera_port, self.camera_user_name, self.camera_password)
+        task = threading.Thread(target=sdk_streaming.run)
+        task.setDaemon(True)
+        task.start()
         # 循环运算
         while self.is_quit == False:
             #如果队列中没有图像则直接继续
-            if not SdkGetStreaming.GetSdkStreaming.data_chane1.empty():
+            if not SdkGetStreaming.GetSdkStreaming.image_que.empty():
                 self.last_nonempty_time = time.time()
-                img = SdkGetStreaming.GetSdkStreaming.data_chane1.get()
+                img = SdkGetStreaming.GetSdkStreaming.image_que.get()
             elif time.time()-self.last_nonempty_time>3:
                 error_code = 2
                 break
@@ -115,7 +119,7 @@ class AiDealThreading(QThread):
                 if left > check_left and left < check_right:
                         if index<box_num-1:
                             #两板中心距离小于两板宽度和的一半
-                            if (abs(xywhs[index+1][0] - xywhs[index][0]) < 0.52*(xywhs[index+1][2] + xywhs[index][2])) and up>check_up:
+                            if (abs(xywhs[index+1][0] - xywhs[index][0]) < 0.5*(xywhs[index+1][2] + xywhs[index][2])) and up>check_up:
                                 is_stack = True
                 #人工检板判定
                 if up<check_up:

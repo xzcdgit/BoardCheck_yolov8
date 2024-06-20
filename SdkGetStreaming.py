@@ -8,8 +8,9 @@ import HCNetSDK
 import PlayCtrl
 import numpy as np
 import cv2
-import queue
 import threading
+import queue
+import time
 
 
 DLL_PATH_WIN = os.path.dirname(os.path.abspath(__file__)) + r"\lib\win"
@@ -17,7 +18,8 @@ DLL_PATH_LINUX = os.path.dirname(os.path.abspath(__file__)) + r"\lib\linux"
 
 
 class GetSdkStreaming:
-    data_chane1 = queue.Queue(3)
+
+    image_que = queue.Queue(2)
 
     # 全局参数初始化
     def __init__(
@@ -58,6 +60,11 @@ class GetSdkStreaming:
 
         self.SetSDKInitCfg()  # 设置组件库和SSL库加载路径
 
+    def quit_tk(self):
+        if self.preview_win is not None:
+            self.stop_get_streaming()
+            self.preview_win.quit()
+
     def run(self):
         # 创建窗口
         self.preview_win = tkinter.Tk()
@@ -93,7 +100,7 @@ class GetSdkStreaming:
             # 释放资源
             self.Objdll.NET_DVR_Cleanup()
             return 2
-
+        self.lUserId = lUserId
         # 定义码流回调函数
         funcRealDataCallBack_V30 = HCNetSDK.REALDATACALLBACK(self.RealDataCallBack_V30)
         # 开启预览
@@ -110,7 +117,11 @@ class GetSdkStreaming:
             # 释放资源
             self.Objdll.NET_DVR_Cleanup()
             return 3
+        self.lRealPlayHandle = lRealPlayHandle
         self.preview_win.mainloop()
+        print("run end")
+        
+        '''
         # 关闭预览
         self.Objdll.NET_DVR_StopRealPlay(lRealPlayHandle)
 
@@ -126,9 +137,11 @@ class GetSdkStreaming:
 
         # 释放资源
         self.Objdll.NET_DVR_Cleanup()
+        print("???")
+        '''
 
     def stop_get_streaming(self):
-        if self.lRealPlayHandle >= 0:
+        if self.lRealPlayHandle is not None and self.lRealPlayHandle >= 0:
             # 关闭预览
             self.Objdll.NET_DVR_StopRealPlay(self.lRealPlayHandle)
 
@@ -283,9 +296,9 @@ class GetSdkStreaming:
             self.yv12toYUV(pImgYUV, imgsrc)  # 得到图像的Y分量（灰度图像）
             pImgdst = pImgYUV
         # end if
-        if GetSdkStreaming.data_chane1.full():
-            cc = GetSdkStreaming.data_chane1.get()
-        GetSdkStreaming.data_chane1.put(pImgdst)
+        if GetSdkStreaming.image_que.full():
+            cc = GetSdkStreaming.image_que.get()
+        GetSdkStreaming.image_que.put(pImgdst)
 
     def yv12toYUV(self, outYuv: np.ndarray, inYv12: np.ndarray):
         """
@@ -320,12 +333,6 @@ class GetSdkStreaming:
             outYuv[:, :, 2][::2][:, 1::2] = tmp
             outYuv[:, :, 2][1::2][:, ::2] = tmp
             outYuv[:, :, 2][1::2][:, 1::2] = tmp
-
-
-def func(ip:str="10.70.37.10", port=8000, user_name:str="admin", password:str="13860368866xzc"):
-    myDemo = GetSdkStreaming(ip, port, user_name, password)
-    myDemo.run()
-    print("func")
 
 if __name__ == "__main__":
     pass

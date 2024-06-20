@@ -46,8 +46,7 @@ class ModbusTcpClientClass:
         self, host: str = "192.168.31.65", port: int = 502, timeout: float = 0.2
     ) -> None:
         self.count_reconnect_try = 0
-        self.count_reconnect_limit = 3
-        self.is_connect = False
+        self.count_reconnect_limit = 99
         self.host = host
         self.port = port
         self.master = modbus_tcp.TcpMaster(self.host, self.port, timeout)
@@ -55,8 +54,6 @@ class ModbusTcpClientClass:
         print("connected")
 
     def write_single_coil(self, output_index: int = -1, output_val: int = 0):
-        if not self.is_connect:
-            return False
 
         if self.count_reconnect_try > self.count_reconnect_limit:
             return False
@@ -70,9 +67,6 @@ class ModbusTcpClientClass:
             return False
         
     def write_holding_register(self, address:int, val:int):
-        if not self.is_connect:
-            return False
-        
         if self.count_reconnect_try > self.count_reconnect_limit:
             return False
         try:
@@ -90,7 +84,6 @@ class ModbusTcpClientClass:
             self.master = modbus_tcp.TcpMaster(self.host, self.port, timeout_in_sec=0.2)
             return True
         except Exception as e:
-            print(e)
             return False
 
     def close(self):
@@ -106,10 +99,6 @@ class ModbusTcpClientClass:
 
 if __name__ == "__main__":
     myDemo = ModbusTcpClientClass()
-    myDemo.write_single_coil(2, 1)
-    time.sleep(0.1)
-    myDemo.write_single_coil(2, 0)
-    time.sleep(0.1)
-    myDemo.write_single_coil(1, 1)
-    time.sleep(0.1)
-    myDemo.write_single_coil(1, 0)
+    myDemo.write_holding_register(5, 11)
+    time.sleep(1)
+    myDemo.write_holding_register(5, 10)

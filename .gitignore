@@ -29,6 +29,7 @@ log.txt
 storage.googleapis.com
 runs/*
 data/*
+imgs/*
 data/images/*
 !data/*.yaml
 !data/hyps

@@ -10,6 +10,8 @@ from PyQt5.QtGui import QPixmap
 from Ui_Main import Ui_MainWindow
 from MyThreaing import AiDealThreading
 import Modbus
+import StsServer
+import WatchDog
 
 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("myappid")
 
@@ -30,21 +32,19 @@ class MyApp(QMainWindow, Ui_MainWindow):
         camera_port = int(conf['camera_info']['port'])
         camera_user_name = conf['camera_info']['user_name']
         camera_password = conf['camera_info']['password']
-        # 通用参数
+        ## 通用参数
         img_save_folder_path = conf['common_info']['img_save_folder_path']
-        # 模型文件地址
         module_path = conf['module_info']['path']
-        # io模块通讯参数
         io_module_ip = conf['io_module_info']['ip']
         io_module_port = int(conf['io_module_info']['port'])
         io_module_timeout = float(conf['io_module_info']['timeout'])
-        # 图像记录文件地址
         self.img_save_folder_path = img_save_folder_path
-
-        #标识符设置
         self.is_run = False #分析运行信号 防止重复运行ai分析线程
         self.last_update_time = 0  # 上次数据更新时间
         self.fps = 0  # fps记录
+        self.image_fresh_time = 0  # 图像刷新时间
+
+        ## 特殊设定部分
         self.stack_last_time = 0  # 最近一次出现叠板的时间
         self.handle_check_last_time = 0  # 最近一次出现人工检测的时间
         self.last_output_type = False
@@ -55,10 +55,20 @@ class MyApp(QMainWindow, Ui_MainWindow):
 
         # 设置图像Ai分析线程
         self.ai_deal_thread = AiDealThreading(camera_ip, camera_port, camera_user_name, camera_password, module_path)
+        self.ai_deal_thread.imgSignal.connect(self.recall_show_img) 
+        self.ai_deal_thread.infoSignal.connect(self.recall_show_info)
+        self.ai_deal_thread.finishSignal.connect(self.recall_quit_info)
+        # 设置tcpserver模块
+        self.tcp_server = StsServer.SpeTcpServer()
+        self.tcp_server.start()
+        # 设置看门狗线程
+        self.watch_dog = WatchDog.StdDog()
+        self.watch_dog.param_set(self.img_save_folder_path, 10)
+        self.watch_dog.infoSignal.connect(self.recall_self_checking)
+        self.watch_dog.start()
 
         # 连接ui信号
         self.connect_ui_signal()
-
         #log文件参数设置
         self.init_log()
 
@@ -85,10 +95,6 @@ class MyApp(QMainWindow, Ui_MainWindow):
     def connect_ui_signal(self):
         self.pushButton.clicked.connect(self.start_img_thread)  # 设置图像显示线程
         self.pushButton_2.clicked.connect(self.quit_img_thread)  # 退出图像显示线程
-        self.ai_deal_thread.imgSignal.connect(self.recall_show_img) 
-        self.ai_deal_thread.infoSignal.connect(self.recall_show_info)
-        self.ai_deal_thread.finishSignal.connect(self.recall_quit_info)
-
 
     # 启动取图线程
     def start_img_thread(self):
@@ -100,8 +106,29 @@ class MyApp(QMainWindow, Ui_MainWindow):
         self.ai_deal_thread.quit_thread()
         self.is_run = False
 
+    # 状态自检测并同步至tcp服务器
+    def recall_self_checking(self, requestion):
+
+        # 相机状态检测
+        if time.time() - self.image_fresh_time > 2:
+            self.tcp_server.camera_sts = 7
+            self.label_4.setStyleSheet("color: white; background-color: Red ")
+        else:
+            self.tcp_server.camera_sts = 0
+            self.label_4.setStyleSheet("color: white; background-color: Green ")
+
+        # IO模块状态检测
+        res = self.modbus_controller.write_holding_register(0, 1)
+        if res:
+            self.tcp_server.io_sts = 0
+            self.label_5.setStyleSheet("color: white; background-color: Green ")
+        else:
+            self.tcp_server.io_sts = 7
+            self.label_5.setStyleSheet("color: white; background-color: Red ")
+
     # 图像回调
     def recall_show_img(self, pixs):
+        self.image_fresh_time = time.time()
         if pixs[0] is not None:
             self.label.setPixmap(QPixmap(pixs[0]))
             self.label.setScaledContents(True)
@@ -111,6 +138,7 @@ class MyApp(QMainWindow, Ui_MainWindow):
 
     # 判定信息回调
     def recall_show_info(self, infos: dict):
+        #通用设置
         current_time = time.time() # 当前时间记录
         # 帧率显示
         el_time = current_time - self.last_update_time
@@ -121,7 +149,10 @@ class MyApp(QMainWindow, Ui_MainWindow):
         self.label_2.setText("{:.1f}".format(fps))
         self.last_update_time = current_time
 
+
         # 堆叠判定
+        is_stack = False
+        is_handle_check = False
         if infos["is_stack"]:
             self.stack_last_time = time.time()
             self.label_3.setText("是")
@@ -133,13 +164,13 @@ class MyApp(QMainWindow, Ui_MainWindow):
             is_stack = False
 
         # 人工检板判定
-        is_handle_check = infos["is_handle_check"]
-        if is_handle_check:
+        if infos["is_handle_check"]:
             self.handle_check_last_time = time.time()
+            is_handle_check = True
             self.label_6.setText("是")
             self.label_6.setStyleSheet("color: white; background-color: Red ")
         else:
-            self.handle_check_last_time = time.time()
+            is_handle_check = False
             self.label_6.setText("否")
             self.label_6.setStyleSheet("color: white; background-color: Green ")
 
@@ -152,6 +183,8 @@ class MyApp(QMainWindow, Ui_MainWindow):
                 infos["is_stack"],
             )
         )
+
+
         #信号输出
         if is_stack or (current_time - self.stack_last_time < 5):
             is_out = True
@@ -168,6 +201,7 @@ class MyApp(QMainWindow, Ui_MainWindow):
             # 存在信号判定输出
             res = self.modbus_controller.write_holding_register(5, is_out+10)
             if not res: print("modbus communication error")
+
             file_name_attach = "common_"+str(is_stack)+"_"
             self.img_save(self.img, self.ori_img, self.img_save_folder_path, file_name_attach)
 
@@ -175,8 +209,6 @@ class MyApp(QMainWindow, Ui_MainWindow):
         if is_out != self.last_output_type:
             self.last_output_type = is_out
             self.logger.info("is_out " + str(is_out))
-            file_name_attach = "change_"+str(is_stack)+"_"
-            self.img_save(self.img, self.ori_img, self.img_save_folder_path, file_name_attach)
 
     # 退出信息回调
     def recall_quit_info(self, quit_info: tuple):
@@ -187,18 +219,10 @@ class MyApp(QMainWindow, Ui_MainWindow):
 
     #图像记录
     def img_save(self, img, ori_img, folder_path:str, file_name_attach:str = "", max_num:int = 50000):
-        files = os.listdir(folder_path)
         full_path = folder_path + "\\" + file_name_attach + str(int(time.time()*1000))+".jpg"
         ori_full_path = folder_path + "\\" + file_name_attach + str(int(time.time()*1000))+"_ori.jpg"
-        img_num = len(files)
         #保存图像
         if img is not None:
-            #是否清理图片
-            if img_num > max_num:
-                for index, file in enumerate(files):
-                    os.remove(folder_path + "\\" + file)
-                    if index>max_num*0.001:
-                        break
             img.save(full_path,"jpg", 100)
             cv2.imwrite(ori_full_path,ori_img)
 
@@ -207,10 +231,6 @@ if __name__ == "__main__":
     myapp = MyApp()
     myapp.show()
     sys.exit(app.exec_())
-
-
-
-
 
 
 '''
