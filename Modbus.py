@@ -46,7 +46,7 @@ class ModbusTcpClientClass:
         self, host: str = "192.168.31.65", port: int = 502, timeout: float = 0.2
     ) -> None:
         self.count_reconnect_try = 0
-        self.count_reconnect_limit = 99
+        self.count_reconnect_limit = 5
         self.host = host
         self.port = port
         self.master = modbus_tcp.TcpMaster(self.host, self.port, timeout)

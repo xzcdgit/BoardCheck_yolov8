@@ -19,47 +19,49 @@ class AiDealThreading(QThread):
         self.camera_user_name = camera_user_name
         self.camera_password = camera_password
         self.model_path = model_path
-        
-        self.is_quit = False
         self.last_nonempty_time = time.time()+10 #加10是因为sdk取图初始化需要时间，而取图超时会判定异常
-        
+        self.is_quit = False
+        self.is_run = False
+        self.sdk_streaming = SdkGetStreaming.GetSdkStreaming(self.camera_ip, self.camera_port, self.camera_user_name, self.camera_password)
+
+    def get_is_run(self):
+        return self.is_run
 
     def quit_thread(self):
-        self.is_quit = True
+        if self.is_run:
+            self.is_quit = True
 
     def run(self) -> None:
+        self.is_run = True
+        self.is_quit = False
         self.run_sdk()
-        #self.run_video()
+        self.is_quit = False
+        self.is_run = False
         
     def run_sdk(self) -> None:
         error_code = 0
-        error_dict = {0:"正常结束",2:"sdk取图超时"}
+        error_dict = {0:"正常结束",7:"sdk取图超时"}
         # 加载yolov8的神经网络模型
         self.model = YOLO(self.model_path)  # load a pretrained model (recommended for training)
-        #sdk_streaming = threading.Thread(target=SdkGetStreaming.func, args=(self.camera_ip, self.camera_port, self.camera_user_name, self.camera_password, ))
-        #sdk_streaming.setDaemon(True)  # 主线程退出时强制退出子线程
-        #sdk_streaming.start()
-        sdk_streaming = SdkGetStreaming.GetSdkStreaming(self.camera_ip, self.camera_port, self.camera_user_name, self.camera_password)
-        task = threading.Thread(target=sdk_streaming.run)
-        task.setDaemon(True)
-        task.start()
         # 循环运算
+        self.sdk_streaming.preview()
         while self.is_quit == False:
             #如果队列中没有图像则直接继续
             if not SdkGetStreaming.GetSdkStreaming.image_que.empty():
                 self.last_nonempty_time = time.time()
                 img = SdkGetStreaming.GetSdkStreaming.image_que.get()
             elif time.time()-self.last_nonempty_time>3:
-                error_code = 2
+                error_code = 7
                 break
             else:
                 time.sleep(0.1)
                 continue
-            qimg, infos = self.ai_deal_Yolov8(img)
+            qimg, infos = self.ai_deal_board(img)
             self.imgSignal.emit((qimg, img))
             self.infoSignal.emit(infos)
-            time.sleep(0.1)
+            time.sleep(0.05)
         self.is_quit = False
+        self.sdk_streaming.stop_get_streaming()
         self.finishSignal.emit((error_code,error_dict[error_code]))
     
     #测试用函数，检测视频
@@ -77,13 +79,13 @@ class AiDealThreading(QThread):
             else:
                 self.img = frame
             img = self.img
-            qimg, infos = self.ai_deal_Yolov8(img)
+            qimg, infos = self.ai_deal_board(img)
             self.imgSignal.emit(qimg)
             self.infoSignal.emit(infos)
             time.sleep(0.02)
         self.is_quit = False
 
-    def ai_deal_Yolov8(self, img) -> None:
+    def ai_deal_board(self, img) -> None:
         is_stack = False
         is_handle_check = False
         board_width = -1
@@ -93,10 +95,7 @@ class AiDealThreading(QThread):
         check_left = img_width*0.29
         check_right = img_width*0.59
         check_up = img_height*0.083
-        #stand_width = 1000
-        #width_max = stand_width*1.2
-        #width_min = stand_width*0.8
-        results = self.model(img)
+        results = self.model(img, verbose=False)
         #因为只传入了一张图所以results的长度只有1
         for result in results:
             conf = result.boxes.conf.cpu().numpy() #置信率
@@ -107,18 +106,14 @@ class AiDealThreading(QThread):
             for index,xywh in enumerate(xywhs):
                 left = xywh[0] - 0.5*xywh[2]
                 up = xywh[1] - 0.5*xywh[3]
-                #if left > 750 and left <1400:
-                #    theory_width = -0.48*left + 1787
-                #    board_width = (xywh[2]/theory_width)*stand_width #加权再归一化计算
-                #    board_height = xywh[3]
-                #    #单板特征宽度判定(排除人工检测)
-                #    # 板宽判定
-                #    if (board_width > width_max or board_width<width_min) and up>120:
-                #        is_stack = True
                 # 双板间距判定
                 if left > check_left and left < check_right:
                         if index<box_num-1:
-                            #两板中心距离小于两板宽度和的一半
+                            #两板中心距离小于两板宽度和的一半(如果第二块板位于图像x轴末端，阈值适当减小)
+                            if xywhs[index+1][0] > img_width*0.93:
+                                ratio = 0.47
+                            else:
+                                ratio = 0.5
                             if (abs(xywhs[index+1][0] - xywhs[index][0]) < 0.5*(xywhs[index+1][2] + xywhs[index][2])) and up>check_up:
                                 is_stack = True
                 #人工检板判定

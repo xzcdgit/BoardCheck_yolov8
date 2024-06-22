@@ -1,14 +1,11 @@
 # coding=utf-8
 
 import os
-import sys
 import platform
-import tkinter
 import HCNetSDK
 import PlayCtrl
 import numpy as np
 import cv2
-import threading
 import queue
 import time
 
@@ -48,27 +45,7 @@ class GetSdkStreaming:
         self.lRealPlayHandle = None
         self.lUserId = None
         self.device_info = None
-
-        self.init_sdk()
-
-    def init_sdk(self):
-        # 获取系统平台
-        self.GetPlatform()
-
-        # 加载库,先加载依赖库
-        self.LoadLib()
-
-        self.SetSDKInitCfg()  # 设置组件库和SSL库加载路径
-
-    def quit_tk(self):
-        if self.preview_win is not None:
-            self.stop_get_streaming()
-            self.preview_win.quit()
-
-    def run(self):
-        # 创建窗口
-        self.preview_win = tkinter.Tk()
-        self.preview_win.withdraw()  # 实现主窗口隐藏
+        self.is_quit = False
 
         # 获取系统平台
         self.GetPlatform()
@@ -76,8 +53,10 @@ class GetSdkStreaming:
         # 加载库,先加载依赖库
         self.LoadLib()
 
-        self.SetSDKInitCfg()  # 设置组件库和SSL库加载路径
+        # 设置组件库和SSL库加载路径
+        self.SetSDKInitCfg()  
 
+    def preview(self):
         # 初始化DLL
         self.Objdll.NET_DVR_Init()
         # 启用SDK写日志
@@ -90,8 +69,8 @@ class GetSdkStreaming:
             print("获取播放库句柄失败")
 
         # 登录设备
-        (lUserId, device_info) = self.LoginDev(self.Objdll)
-        if lUserId < 0:
+        (self.lUserId, self.device_info) = self.LoginDev(self.Objdll)
+        if self.lUserId < 0:
             err = self.Objdll.NET_DVR_GetLastError()
             print(
                 "Login device fail, error code is: %d"
@@ -100,45 +79,22 @@ class GetSdkStreaming:
             # 释放资源
             self.Objdll.NET_DVR_Cleanup()
             return 2
-        self.lUserId = lUserId
         # 定义码流回调函数
-        funcRealDataCallBack_V30 = HCNetSDK.REALDATACALLBACK(self.RealDataCallBack_V30)
+        self.funcRealDataCallBack_V30 = HCNetSDK.REALDATACALLBACK(self.RealDataCallBack_V30)
         # 开启预览
-        lRealPlayHandle = self.OpenPreview(
-            self.Objdll, lUserId, funcRealDataCallBack_V30
+        self.lRealPlayHandle = self.OpenPreview(
+            self.Objdll, self.lUserId, self.funcRealDataCallBack_V30
         )
-        if lRealPlayHandle < 0:
+        if self.lRealPlayHandle < 0:
             print(
                 "Open preview fail, error code is: %d"
                 % self.Objdll.NET_DVR_GetLastError()
             )
             # 登出设备
-            self.Objdll.NET_DVR_Logout(lUserId)
+            self.Objdll.NET_DVR_Logout(self.lUserId)
             # 释放资源
             self.Objdll.NET_DVR_Cleanup()
             return 3
-        self.lRealPlayHandle = lRealPlayHandle
-        self.preview_win.mainloop()
-        print("run end")
-        
-        '''
-        # 关闭预览
-        self.Objdll.NET_DVR_StopRealPlay(lRealPlayHandle)
-
-        # 停止解码，释放播放库资源
-        if self.PlayCtrl_Port.value > -1:
-            self.Playctrldll.PlayM4_Stop(self.PlayCtrl_Port)
-            self.Playctrldll.PlayM4_CloseStream(self.PlayCtrl_Port)
-            self.Playctrldll.PlayM4_FreePort(self.PlayCtrl_Port)
-            self.PlayCtrl_Port = PlayCtrl.c_long(-1)
-
-        # 登出设备
-        self.Objdll.NET_DVR_Logout(lUserId)
-
-        # 释放资源
-        self.Objdll.NET_DVR_Cleanup()
-        print("???")
-        '''
 
     def stop_get_streaming(self):
         if self.lRealPlayHandle is not None and self.lRealPlayHandle >= 0:

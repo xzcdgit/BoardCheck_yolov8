@@ -39,7 +39,6 @@ class MyApp(QMainWindow, Ui_MainWindow):
         io_module_port = int(conf['io_module_info']['port'])
         io_module_timeout = float(conf['io_module_info']['timeout'])
         self.img_save_folder_path = img_save_folder_path
-        self.is_run = False #分析运行信号 防止重复运行ai分析线程
         self.last_update_time = 0  # 上次数据更新时间
         self.fps = 0  # fps记录
         self.image_fresh_time = 0  # 图像刷新时间
@@ -63,7 +62,7 @@ class MyApp(QMainWindow, Ui_MainWindow):
         self.tcp_server.start()
         # 设置看门狗线程
         self.watch_dog = WatchDog.StdDog()
-        self.watch_dog.param_set(self.img_save_folder_path, 10)
+        self.watch_dog.param_set(self.img_save_folder_path, 30000)
         self.watch_dog.infoSignal.connect(self.recall_self_checking)
         self.watch_dog.start()
 
@@ -73,9 +72,8 @@ class MyApp(QMainWindow, Ui_MainWindow):
         self.init_log()
 
         #自启动设置
-        if self.is_run == False:
+        if self.ai_deal_thread.get_is_run() == False:
             self.ai_deal_thread.start()
-            self.is_run = True
             self.showMaximized()
 
 
@@ -98,13 +96,11 @@ class MyApp(QMainWindow, Ui_MainWindow):
 
     # 启动取图线程
     def start_img_thread(self):
-        if self.is_run == False:
+        if self.ai_deal_thread.get_is_run() == False:
             self.ai_deal_thread.start()
-            self.is_run = True
 
     def quit_img_thread(self):
         self.ai_deal_thread.quit_thread()
-        self.is_run = False
 
     # 状态自检测并同步至tcp服务器
     def recall_self_checking(self, requestion):
@@ -200,8 +196,7 @@ class MyApp(QMainWindow, Ui_MainWindow):
             self.last_output_time = current_time
             # 存在信号判定输出
             res = self.modbus_controller.write_holding_register(5, is_out+10)
-            if not res: print("modbus communication error")
-
+            if not res: pass
             file_name_attach = "common_"+str(is_stack)+"_"
             self.img_save(self.img, self.ori_img, self.img_save_folder_path, file_name_attach)
 
@@ -226,11 +221,14 @@ class MyApp(QMainWindow, Ui_MainWindow):
             img.save(full_path,"jpg", 100)
             cv2.imwrite(ori_full_path,ori_img)
 
-if __name__ == "__main__":
+def main():
     app = QApplication(sys.argv)
     myapp = MyApp()
     myapp.show()
     sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    main()
 
 
 '''
