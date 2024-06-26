@@ -56,13 +56,15 @@ class GetSdkStreaming:
         # 设置组件库和SSL库加载路径
         self.SetSDKInitCfg()  
 
-    def preview(self):
         # 初始化DLL
         self.Objdll.NET_DVR_Init()
         # 启用SDK写日志
         self.Objdll.NET_DVR_SetLogToFile(
             3, bytes("./SdkLog_Python/", encoding="utf-8"), False
         )
+
+
+    def preview(self):
 
         # 获取一个播放句柄
         if not self.Playctrldll.PlayM4_GetPort(PlayCtrl.byref(self.PlayCtrl_Port)):

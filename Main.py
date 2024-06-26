@@ -197,13 +197,14 @@ class MyApp(QMainWindow, Ui_MainWindow):
             # 存在信号判定输出
             res = self.modbus_controller.write_holding_register(5, is_out+10)
             if not res: pass
-            file_name_attach = "common_"+str(is_stack)+"_"
-            self.img_save(self.img, self.ori_img, self.img_save_folder_path, file_name_attach)
 
         # 输出信号变化日志记录 只有信号变化时记录日志
         if is_out != self.last_output_type:
             self.last_output_type = is_out
             self.logger.info("is_out " + str(is_out))
+
+            file_name_attach = "change_"+str(is_stack)+"_"
+            self.img_save(self.img, self.ori_img, self.img_save_folder_path, file_name_attach)
 
     # 退出信息回调
     def recall_quit_info(self, quit_info: tuple):
