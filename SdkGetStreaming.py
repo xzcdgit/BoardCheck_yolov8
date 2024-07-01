@@ -42,9 +42,9 @@ class GetSdkStreaming:
         self.Playctrldll = None  # 播放库
         self.FuncDecCB = None  # 播放库解码回调函数，需要定义为全局的
 
-        self.lRealPlayHandle = None
-        self.lUserId = None
-        self.device_info = None
+        self.lRealPlayHandle = -1
+        self.lUserId = -1
+        self.device_info = -1
         self.is_quit = False
 
         # 获取系统平台
@@ -58,45 +58,116 @@ class GetSdkStreaming:
 
         # 初始化DLL
         self.Objdll.NET_DVR_Init()
+
         # 启用SDK写日志
         self.Objdll.NET_DVR_SetLogToFile(
             3, bytes("./SdkLog_Python/", encoding="utf-8"), False
         )
 
-
-    def preview(self):
-
-        # 获取一个播放句柄
-        if not self.Playctrldll.PlayM4_GetPort(PlayCtrl.byref(self.PlayCtrl_Port)):
-            print("获取播放库句柄失败")
-
-        # 登录设备
-        (self.lUserId, self.device_info) = self.LoginDev(self.Objdll)
+    def btn_login(self):
         if self.lUserId < 0:
-            err = self.Objdll.NET_DVR_GetLastError()
-            print(
-                "Login device fail, error code is: %d"
-                % self.Objdll.NET_DVR_GetLastError()
+            # 登录设备
+            #(self.lUserId, self.device_info) = self.LoginDev(self.Objdll)
+
+            # 登录注册设备
+            self.device_info = HCNetSDK.NET_DVR_DEVICEINFO_V30()
+            self.lUserId = self.Objdll.NET_DVR_Login_V30(
+                self.ip,
+                self.port,
+                self.user_name,
+                self.password,
+                PlayCtrl.byref(self.device_info),
             )
-            # 释放资源
-            self.Objdll.NET_DVR_Cleanup()
-            return 2
-        # 定义码流回调函数
-        self.funcRealDataCallBack_V30 = HCNetSDK.REALDATACALLBACK(self.RealDataCallBack_V30)
-        # 开启预览
-        self.lRealPlayHandle = self.OpenPreview(
-            self.Objdll, self.lUserId, self.funcRealDataCallBack_V30
-        )
-        if self.lRealPlayHandle < 0:
-            print(
-                "Open preview fail, error code is: %d"
-                % self.Objdll.NET_DVR_GetLastError()
-            )
-            # 登出设备
-            self.Objdll.NET_DVR_Logout(self.lUserId)
-            # 释放资源
-            self.Objdll.NET_DVR_Cleanup()
-            return 3
+
+            if self.lUserId < 0:
+                err = self.Objdll.NET_DVR_GetLastError()
+                print(
+                    "Login device fail, error code is: %d"
+                    % self.Objdll.NET_DVR_GetLastError()
+                )
+                # 释放资源
+                #self.Objdll.NET_DVR_Cleanup()
+            else:
+                chane_total_num = self.device_info.byChanNum
+                print("登录成功", chane_total_num)
+        else:
+            if self.lRealPlayHandle >= 0:
+                print("请先停止预览")
+            elif not self.Objdll.NET_DVR_Logout(self.lUserId):
+                err = self.Objdll.NET_DVR_GetLastError()
+                print(
+                    "Logout device fail, error code is: %d"
+                    % self.Objdll.NET_DVR_GetLastError()
+                )
+            else:
+                print("设备登出成功")
+                self.lUserId = -1
+                self.device_info = -1
+
+    def btn_preview(self):
+        if self.lUserId < 0:
+            print("请先登录设备")
+        else:
+            if self.lRealPlayHandle < 0:
+                preview_info = HCNetSDK.NET_DVR_PREVIEWINFO()
+                preview_info.hPlayWnd = 0
+                preview_info.lChannel = 1  # 通道号
+                preview_info.dwStreamType = 0  # 主码流
+                preview_info.dwLinkMode = 0  # TCP
+                preview_info.bBlocked = 1  # 阻塞取流
+                preview_info.dwDisplayBufNum = 0 #播放库显示缓冲区最大帧数
+                # 获取一个播放句柄
+                if not self.Playctrldll.PlayM4_GetPort(PlayCtrl.byref(self.PlayCtrl_Port)):
+                    err = self.Objdll.NET_DVR_GetLastError()
+                    print(
+                        "PlayM4_GetPort failed, error code= : %d"
+                        % self.Objdll.NET_DVR_GetLastError()
+                    )
+                #定义码流回调函数
+                self.funcRealDataCallBack_V30 = HCNetSDK.REALDATACALLBACK(self.RealDataCallBack_V30)
+
+                # 开始预览并且设置回调函数回调获取实时流数据
+                self.lRealPlayHandle = self.Objdll.NET_DVR_RealPlay_V40(
+                    self.lUserId, PlayCtrl.byref(preview_info), self.funcRealDataCallBack_V30, None
+                )
+                if self.lRealPlayHandle < 0:
+                    err = self.Objdll.NET_DVR_GetLastError()
+                    print(
+                        "NET_DVR_RealPlay_V40 failed, error code is: %d"
+                        % self.Objdll.NET_DVR_GetLastError()
+                    )
+                else:
+                    print("预览成功")
+            else:
+                if not self.Objdll.NET_DVR_StopRealPlay(self.lRealPlayHandle):
+                    err = self.Objdll.NET_DVR_GetLastError()
+                    print(
+                        "NET_DVR_StopRealPlay failed, error code is: %d"
+                        % self.Objdll.NET_DVR_GetLastError()
+                    )
+                else:
+                    if self.PlayCtrl_Port.value >=0:
+                        if not self.Playctrldll.PlayM4_Stop(self.PlayCtrl_Port):
+                            err = self.Objdll.NET_DVR_GetLastError()
+                            print(
+                                "PlayM4_Stop failed, error code is: %d"
+                                % self.Objdll.NET_DVR_GetLastError()
+                            )
+                        if not self.Playctrldll.PlayM4_CloseStream(self.PlayCtrl_Port):
+                            err = self.Objdll.NET_DVR_GetLastError()
+                            print(
+                                "PlayM4_CloseStream failed, error code is: %d"
+                                % self.Objdll.NET_DVR_GetLastError()
+                            )
+                        if not self.Playctrldll.PlayM4_FreePort(self.PlayCtrl_Port):
+                            err = self.Objdll.NET_DVR_GetLastError()
+                            print(
+                                "PlayM4_FreePort failed, error code is: %d"
+                                % self.Objdll.NET_DVR_GetLastError()
+                            )
+                        self.PlayCtrl_Port.value = -1
+                    self.lRealPlayHandle = -1    
+                    print("停止预览成功")
 
     def stop_get_streaming(self):
         if self.lRealPlayHandle is not None and self.lRealPlayHandle >= 0:
@@ -115,6 +186,7 @@ class GetSdkStreaming:
             # 释放资源
             self.Objdll.NET_DVR_Cleanup()
 
+    # 加载动态库
     def LoadLib(self):
         # 加载库,先加载依赖库
         if self.is_windows:
@@ -160,18 +232,6 @@ class GetSdkStreaming:
                 4, PlayCtrl.create_string_buffer(strPath + b"/libssl.so.1.1")
             )
 
-    def LoginDev(self, Objdll):
-        # 登录注册设备
-        device_info = HCNetSDK.NET_DVR_DEVICEINFO_V30()
-        lUserId = Objdll.NET_DVR_Login_V30(
-            self.ip,
-            self.port,
-            self.user_name,
-            self.password,
-            PlayCtrl.byref(device_info),
-        )
-        return (lUserId, device_info)
-
     # 解码回调函数
     def DecCBFun(self, nPort, pBuf, nSize, pFrameInfo, nUser, nReserved2):
         if pFrameInfo.contents.nType == 3:
@@ -213,33 +273,7 @@ class GetSdkStreaming:
         else:
             print("其他数据,长度:", dwBufSize)
 
-    def OpenPreview(self, Objdll, lUserId, callbackFun):
-        """
-        打开预览
-        """
-        preview_info = HCNetSDK.NET_DVR_PREVIEWINFO()
-        preview_info.hPlayWnd = 0
-        preview_info.lChannel = 1  # 通道号
-        preview_info.dwStreamType = 0  # 主码流
-        preview_info.dwLinkMode = 0  # TCP
-        preview_info.bBlocked = 1  # 阻塞取流
-
-        # 开始预览并且设置回调函数回调获取实时流数据
-        lRealPlayHandle = Objdll.NET_DVR_RealPlay_V40(
-            lUserId, PlayCtrl.byref(preview_info), callbackFun, None
-        )
-        return lRealPlayHandle
-
-    def InputData(self, fileMp4, Playctrldll):
-        while True:
-            pFileData = fileMp4.read(4096)
-            if pFileData is None:
-                break
-            if not Playctrldll.PlayM4_InputData(
-                self.PlayCtrl_Port, pFileData, len(pFileData)
-            ):
-                break
-
+    # 实时图像存队列
     def AddFrame(self, nHeight, nWidth, imgsrc, img_type=True):
         if img_type:  # 彩色图像
             pImgYUV = np.zeros(
@@ -258,6 +292,7 @@ class GetSdkStreaming:
             cc = GetSdkStreaming.image_que.get()
         GetSdkStreaming.image_que.put(pImgdst)
 
+    # yv12转yuv
     def yv12toYUV(self, outYuv: np.ndarray, inYv12: np.ndarray):
         """
         :param outYuv: 3 dimension ndarray
@@ -292,5 +327,96 @@ class GetSdkStreaming:
             outYuv[:, :, 2][1::2][:, ::2] = tmp
             outYuv[:, :, 2][1::2][:, 1::2] = tmp
 
+
+
+    # 以下为旧函数 无用，仅作记录
+    # 登录设备
+    def LoginDev(self, Objdll):
+        # 登录注册设备
+        device_info = HCNetSDK.NET_DVR_DEVICEINFO_V30()
+        lUserId = Objdll.NET_DVR_Login_V30(
+            self.ip,
+            self.port,
+            self.user_name,
+            self.password,
+            PlayCtrl.byref(device_info),
+        )
+        return (lUserId, device_info)
+
+    def OpenPreview(self, Objdll, lUserId, callbackFun):
+        """
+        打开预览
+        """
+        preview_info = HCNetSDK.NET_DVR_PREVIEWINFO()
+        preview_info.hPlayWnd = 0
+        preview_info.lChannel = 1  # 通道号
+        preview_info.dwStreamType = 0  # 主码流
+        preview_info.dwLinkMode = 0  # TCP
+        preview_info.bBlocked = 1  # 阻塞取流
+
+        # 开始预览并且设置回调函数回调获取实时流数据
+        lRealPlayHandle = Objdll.NET_DVR_RealPlay_V40(
+            lUserId, PlayCtrl.byref(preview_info), callbackFun, None
+        )
+        return lRealPlayHandle
+
+    def InputData(self, fileMp4, Playctrldll):
+        while True:
+            pFileData = fileMp4.read(4096)
+            if pFileData is None:
+                break
+            if not Playctrldll.PlayM4_InputData(
+                self.PlayCtrl_Port, pFileData, len(pFileData)
+            ):
+                break
+
+    def preview(self):
+
+        # 获取一个播放句柄
+        if not self.Playctrldll.PlayM4_GetPort(PlayCtrl.byref(self.PlayCtrl_Port)):
+            print("获取播放库句柄失败")
+
+        # 登录设备
+        (self.lUserId, self.device_info) = self.LoginDev(self.Objdll)
+        if self.lUserId < 0:
+            err = self.Objdll.NET_DVR_GetLastError()
+            print(
+                "Login device fail, error code is: %d"
+                % self.Objdll.NET_DVR_GetLastError()
+            )
+            # 释放资源
+            self.Objdll.NET_DVR_Cleanup()
+            return 2
+        # 定义码流回调函数
+        self.funcRealDataCallBack_V30 = HCNetSDK.REALDATACALLBACK(self.RealDataCallBack_V30)
+        # 开启预览
+        self.lRealPlayHandle = self.OpenPreview(
+            self.Objdll, self.lUserId, self.funcRealDataCallBack_V30
+        )
+        if self.lRealPlayHandle < 0:
+            print(
+                "Open preview fail, error code is: %d"
+                % self.Objdll.NET_DVR_GetLastError()
+            )
+            # 登出设备
+            self.Objdll.NET_DVR_Logout(self.lUserId)
+            # 释放资源
+            self.Objdll.NET_DVR_Cleanup()
+            return 3
+
+
 if __name__ == "__main__":
-    pass
+    count = 0
+    myDemo = GetSdkStreaming('192.168.31.61')
+    while True:
+        if not myDemo.image_que.empty():
+            cv2.imshow("test", myDemo.image_que.get())
+        else:
+            cv2.imshow("blank", np.zeros((200,200,3), dtype=np.uint8))
+        key = cv2.waitKey(50)
+        if key == ord('1'):
+            print(key)
+            myDemo.btn_login()
+        elif key == ord('2'):
+            print(key)
+            myDemo.btn_preview()

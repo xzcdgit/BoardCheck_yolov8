@@ -26,6 +26,7 @@ class SpeTcpServer(QThread):
         self.tcp_server.bind((server_ip, server_port))
         # listen后的这个套接字只负责接收客户端连接请求，不能收发消息，收发消息使用返回的这个新套接字tcp_client来完成
         self.tcp_server.listen(4)
+        print("tcp service 启动成功")
 
     def quit_thread(self):
         self.is_quit = True
@@ -42,9 +43,16 @@ class SpeTcpServer(QThread):
                 except Exception as e:
                     recv_trans = ""
                 print("客户端发来的消息是:", recv_trans)
-
-                send_data = f"相机状态:{self.camera_sts}  io模块状态{self.io_sts}\n".encode()
+                if recv_trans == "状态":
+                    send_data = f"相机状态:{self.camera_sts} io模块状态:{self.io_sts}\n".encode()
+                elif recv_data == "识别图像":
+                    send_data = ""
+                elif recv_data == "原始图像":
+                    send_data = ""
+                else:
+                    send_data = "不支持的命令\n".encode()
                 tcp_client_1.send(send_data)
+
             else:
                 print("%s 客户端下线了..." % tcp_client_address[1])
                 tcp_client_1.close()
