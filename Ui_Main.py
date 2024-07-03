@@ -252,7 +252,7 @@ class Ui_MainWindow(object):
         self.pushButton_2.setText(_translate("MainWindow", "停止"))
         self.groupBox.setTitle(_translate("MainWindow", "信号输出"))
         self.label_7.setText(_translate("MainWindow", "否"))
-        self.groupBox_4.setTitle(_translate("MainWindow", "人检判定"))
+        self.groupBox_4.setTitle(_translate("MainWindow", "人工干预判定"))
         self.label_6.setText(_translate("MainWindow", "否"))
         self.groupBox_2.setTitle(_translate("MainWindow", "帧率"))
         self.label_2.setText(_translate("MainWindow", "0"))
