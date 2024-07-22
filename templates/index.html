@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>通道人检</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <code><script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script></code>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        #image {
+            width: 100%;
+            height: auto;
+            max-width: 100%;
+            display: block;
+        }
+    </style>
+    <code><script type="text/javascript" charset="utf-8">
+        var socket = io();
+        socket.on('connect', function() {
+            console.log('Connected to server');
+        });
+        socket.on('update_text', function(msg) {
+            document.getElementById('text').innerHTML = msg.data;
+        });
+        socket.on('update_image', function(msg) {
+            document.getElementById('image').src = 'data:image/jpeg;base64,' + msg.data;
+        });
+    </script></code>
+</head>
+<body>
+    <div class="container">
+        <h1>实时监控</h1>
+        <p id="text"></p>
+        <img id="image" src="" alt="视频流">
+    </div>
+</body>
+</html>

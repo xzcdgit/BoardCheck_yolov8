@@ -1,0 +1,15 @@
+title{
+    color: blue;
+}
+
+img{
+    width: 100%;
+    object-fit: contain;
+    overflow: hidden;
+}
+.c1{
+    height: auto;
+}
+.c2{
+    height: auto;
+}

@@ -1,8 +1,9 @@
+#该模块用于创建tcp服务，供客户端访问查看服务端状态和信息
+
+
 import time
-import os
 import socket
 from PyQt5.QtCore import QThread
-import numpy as np
 import threading
 import cv2
 

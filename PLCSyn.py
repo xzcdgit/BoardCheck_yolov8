@@ -1,3 +1,6 @@
+# 该模块用于和PLC通讯，通讯协议为modbus tcp
+
+
 from pymodbus.client import ModbusTcpClient
 from pymodbus.bit_read_message import ReadCoilsResponse
 from pymodbus.register_read_message import ReadInputRegistersResponse
@@ -16,6 +19,7 @@ class ModbusTcpClientClass(QThread):
         self.host = host
         self.port = port
         self.client = ModbusTcpClient(host,port)
+        self.out = False
         
     def run(self):
         # 循环读取主函数
@@ -24,8 +28,9 @@ class ModbusTcpClientClass(QThread):
             #同步PLC保持寄存器状态
             self.connect_sts, self.holding_register_val = self.read_holding_register(10, 2)
             self.infoSignal.emit({"plc_sts":self.connect_sts,"holding_register":self.holding_register_val})
+            self.write_holding_register(5, self.out+10) #写入数据
             if self.connect_sts:
-                time.sleep(0.15)
+                time.sleep(0.01)
             else:
                 time.sleep(2)
                 self.reconnect(0,1)

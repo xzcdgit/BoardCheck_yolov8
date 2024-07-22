@@ -30,6 +30,7 @@ storage.googleapis.com
 runs/*
 data/*
 imgs/*
+lib/*
 data/images/*
 !data/*.yaml
 !data/hyps
@@ -86,7 +87,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/

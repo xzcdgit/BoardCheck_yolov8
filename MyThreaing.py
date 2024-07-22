@@ -1,12 +1,12 @@
+# 主要的功能模块，用于调用AI模型进行图像分析，并对分析结果进行进一步处理后发送回GUI线程
+
+
 import time
-import os
 import cv2
 from PyQt5.QtCore import QThread, pyqtSignal
-from PyQt5.QtGui import QImage, QPainter
 import numpy as np
 import SdkGetStreaming
 from ultralytics import YOLO
-import threading
 
 
 class AiDealThreading(QThread):
@@ -14,13 +14,15 @@ class AiDealThreading(QThread):
     imgSignal = pyqtSignal(tuple)
     infoSignal = pyqtSignal(dict)
 
-    def __init__(self, camera_ip, camera_port, camera_user_name, camera_password, model_path:str) -> None:
+    def __init__(self, camera_ip, camera_port, camera_user_name, camera_password, model_path:str, gpu_index:int=0) -> None:
         super().__init__(None)
+
         self.camera_ip = camera_ip
         self.camera_port = camera_port
         self.camera_user_name = camera_user_name
         self.camera_password = camera_password
         self.model_path = model_path
+        self.predict_device = gpu_index
         # 加载yolov8的神经网络模型
         self.model = YOLO(self.model_path)  # load a pretrained model (recommended for training)
         self.last_nonempty_time = time.time()+10 #加10是因为sdk取图初始化需要时间，而取图超时会判定异常
@@ -96,12 +98,12 @@ class AiDealThreading(QThread):
         board_height = -1
         img_width = img.shape[1]
         img_height = img.shape[0]
-        check_left = img_width*0.29
-        check_right = img_width*0.59
+        check_left = img_width*0
+        check_right = img_width*1
         check_up = img_height*0.083
-        input_img = img[:,1200:]
-        results = self.model(input_img, verbose=False)
-        #因为只传入了一张图所以results的长度只有1
+        input_img = img
+        results = self.model.predict(input_img, conf=0.4, verbose=False, device=self.predict_device)
+        # 因为只传入了一张图所以results的长度只有1，该循环只会运行一次
         for result in results:
             conf = result.boxes.conf.cpu().numpy() #置信率
             cls = result.boxes.cls.cpu().numpy() #标签号
@@ -110,21 +112,25 @@ class AiDealThreading(QThread):
             box_num = len(xywhs)
             for index,xywh in enumerate(xywhs):
                 left = xywh[0] - 0.5*xywh[2]
+                right = xywh[0] + 0.5*xywh[2]
                 up = xywh[1] - 0.5*xywh[3]
+                down = xywh[1] + 0.5*xywh[3]
                 # 双板间距判定
-                if left > check_left and left < check_right:
+                if left > check_left and right < check_right:
                         if index<box_num-1:
                             #两板中心距离小于两板宽度和的一半(如果第二块板位于图像x轴末端，阈值适当减小)
                             if xywhs[index+1][0] > img_width*0.93:
-                                ratio = 0.47
+                                ratio = 0.53
                             else:
                                 ratio = 0.5
-                            if (abs(xywhs[index+1][0] - xywhs[index][0]) < 0.5*(xywhs[index+1][2] + xywhs[index][2])) and up>check_up:
+                            if (abs(xywhs[index+1][0] - xywhs[index][0]) < ratio*(xywhs[index+1][2] + xywhs[index][2])):
                                 is_stack = True
                 #人工检板判定
                 if up<check_up:
                     is_handle_check = True
             im_bgr = result.plot()
+
+        # 显示部分
         # 图像格式转换PIL.IMAGE转cv2图像
         img = np.asanyarray(im_bgr)
         # #绘制ori
@@ -144,12 +150,11 @@ class AiDealThreading(QThread):
     
 if __name__ == "__main__":
     # 设置图像Ai分析线程
-    ai_deal_thread = AiDealThreading('',0,'','',model_path=r"D:\Code\Python\HumanDetection_yolov8\best_s.pt")
-    ai_deal_thread.set_ori([0,0.23],[1,1])
-    img = cv2.imread(r"D:\Code\Python\HumanDetection_yolov8\imgs\Test_1719471114058_ori.jpg")
-    img, infos = ai_deal_thread.ai_deal_body(img)
+    ai_deal_thread = AiDealThreading('',0,'','',model_path=r"D:\Code\Python\BoardCheck_yolov8\best_n.pt")
+    ai_deal_thread.set_ori([0,0],[1,1])
+    img = cv2.imread(r"C:\Users\01477483\Desktop\临时文件\堆叠检测现场录像\error\20240611.mp4_000000.002.jpg")
+    img, infos = ai_deal_thread.ai_deal_board(img)
     img = cv2.resize(img,dsize=None, dst=None,fx=0.5,fy=0.5)
     cv2.imshow("test",img)
     print(infos)
     cv2.waitKey(0)
-    

@@ -13,75 +13,105 @@ import PLCSyn
 import StsServer
 import FilesClean
 import threading
+import WebService
+from multiprocessing import process, Queue
+import ConfigParams
+from SignalAutoFresh import UiAutoFresh
 
-ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("myappid")
+# ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("myappid")
 
 
 class MyApp(QMainWindow, Ui_MainWindow):
 
-    def __init__(self):
+    def __init__(self, channel_index=0, img_que=None, info_que=None):
         # 设置界面
         super().__init__()
         self.setupUi(self)
-
+        self.channel_index = channel_index
+        self.img_que = img_que
+        self.info_que = info_que
+        # 实时图像设置
         self.img = None
         self.ori_img = None
-        #标识符
-        self.is_out = False #全局输出信号
-        self.is_in = False #全局输入信号
+        # 标识符设置
+        self.is_out = False  # 全局输出信号
+        self.is_in = False  # 全局输入信号
+        self.img_save_lock = False  # 图像保存锁定
         self.last_update_time = time.time()  # 上次数据更新时间
         self.fps = 0  # fps记录
-        self.image_fresh_time = 0  # 图像刷新时间
-        
-        self.stack_last_time = 0
-        self.last_output_type = False
-        self.last_output_time = time.time()
-        self.last_exist_person_info = {"min_distance": 500}
-        
+
+        self.is_stack = False
+        self.is_handle_check = False
+        self.ai_recall_info = None
+
+        self.record_img_info = {"stamp": 0}  # 上次记录图像的时间
+        self.last_is_stack_info = {
+            "stamp": 0,
+        }  # 最近一次叠板记录
+        self.last_is_stack_info = {"stamp": 0}  # 最近一次出现叠板的信息
+        self.last_is_handle_check_info = {"stamp": 0}  # 最近一次出现叠板的信息
+
         # 获取预设参数
         res = self.init_params()
         if res == False:
             print("预设参数初始化失败")
             return
-
         # 设置modbus模块
         self.modbus_controller = PLCSyn.ModbusTcpClientClass(
-            self.io_module_ip, self.io_module_port)
+            self.io_module_ip, self.io_module_port
+        )
         self.modbus_controller.infoSignal.connect(self.recall_plc_syn)
         self.modbus_controller.start()
         # 设置图像Ai分析线程
         self.ai_deal_thread = AiDealThreading(
-            self.camera_ip, self.camera_port, self.camera_user_name, self.camera_password, self.module_path
+            self.camera_ip,
+            self.camera_port,
+            self.camera_user_name,
+            self.camera_password,
+            self.module_path,
+            self.predict_device,
         )
-        self.ai_deal_thread.set_ori(self.ori_pt1_list, self.ori_pt2_list)
+        self.ai_deal_thread.set_ori(self.ori_pt1, self.ori_pt2)
         self.ai_deal_thread.imgSignal.connect(self.recall_show_img)
         self.ai_deal_thread.infoSignal.connect(self.recall_show_info)
         self.ai_deal_thread.finishSignal.connect(self.recall_ai_sts_info)
         # 设置tcpserver模块
-        self.tcp_server = StsServer.SpeTcpServer()
+        self.tcp_server = StsServer.SpeTcpServer(
+            self.tcp_server_ip, self.tcp_server_port
+        )
         self.tcp_server.start()
-        # 设置看门狗线程
-        self.watch_dog = FilesClean.StdDog()
-        self.watch_dog.param_set(self.img_save_folder_path, 10000)
-        self.watch_dog.infoSignal.connect(self.recall_files_full_checking)
-        self.watch_dog.start()
+        # 设置文件自动清理线程
+        self.file_auto_clean = FilesClean.StdDog()
+        self.file_auto_clean.param_set(self.img_save_folder_path, 10000)
+        self.file_auto_clean.infoSignal.connect(self.recall_files_full_checking)
+        self.file_auto_clean.start()
+        # 设置网页端线程
+        self.web_service = WebService.main
+        self.web_threading = threading.Thread(
+            target=self.web_service, args=(self.web_service_ip, self.web_service_port)
+        )
+        self.web_threading.daemon = True
+        self.web_threading.start()
         # 连接ui按钮信号
         self.connect_ui_signal()
         # 初始化log模块设置
         self.init_log()
-        #自启动设置
+        # 设置ui自动刷新线程
+        self.ui_auto_fresh = UiAutoFresh()
+        self.ui_auto_fresh.infoSignal.connect(self.recall_ui_auto_fresh)
+        self.ui_auto_fresh.start()
+
+        # 自启动设置
         if self.ai_deal_thread.get_is_run() == False:
             self.ai_deal_thread.start()
-            #self.showMaximized()
             self.tabWidget.setCurrentIndex(1)
-            
+            # self.showMaximized()
 
     # 日志模块初始化
     def init_log(self):
-
         logger = logging.getLogger(__name__)
         logger.setLevel(level=logging.INFO)
-        handler = logging.FileHandler("log.txt")
+        handler = logging.FileHandler(self.log_save_path)
         handler.setLevel(logging.INFO)
         formatter = logging.Formatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -92,31 +122,36 @@ class MyApp(QMainWindow, Ui_MainWindow):
 
     # 参数设置初始化
     def init_params(self):
+        index = self.channel_index
         try:
-            # 获取预设参数
-            conf = ConfigParser()
-            res = conf.read(os.path.dirname(os.path.abspath(__file__)) +r'\config.ini', encoding='utf-8')
             # 相机通讯参数
-            self.camera_ip = conf["camera_info"]["ip"]
-            self.camera_port = int(conf["camera_info"]["port"])
-            self.camera_user_name = conf["camera_info"]["user_name"]
-            self.camera_password = conf["camera_info"]["password"]
+            self.camera_ip = ConfigParams.channels[index].camera.ip
+            self.camera_port = ConfigParams.channels[index].camera.port
+            self.camera_user_name = ConfigParams.channels[index].camera.user_name
+            self.camera_password = ConfigParams.channels[index].camera.password
             # 通用参数
-            self.img_save_folder_path = conf["common_info"]["img_save_folder_path"]
+            self.img_save_folder_path = ConfigParams.channels[index].img_save_path
             # 模型文件地址
-            self.module_path = conf["module_info"]["path"]
+            self.module_path = ConfigParams.channels[index].modle_path
             # io模块通讯参数
-            self.io_module_ip = conf["io_module_info"]["ip"]
-            self.io_module_port = int(conf["io_module_info"]["port"])
-            self.io_module_timeout = float(conf["io_module_info"]["timeout"])
+            self.io_module_ip = ConfigParams.channels[index].io.ip
+            self.io_module_port = ConfigParams.channels[index].io.port
+            self.io_module_timeout = ConfigParams.channels[index].io.timeout
+            # web模块设置
+            self.web_service_ip = ConfigParams.channels[index].web.ip
+            self.web_service_port = ConfigParams.channels[index].web.port
+            # tcp模块设置
+            self.tcp_server_ip = ConfigParams.channels[index].tcp.ip
+            self.tcp_server_port = ConfigParams.channels[index].tcp.port
+            # ori设置
+            self.ori_pt1 = ConfigParams.channels[index].ori.pt1
+            self.ori_pt2 = ConfigParams.channels[index].ori.pt2
+            # log文件保存地址
+            self.log_save_path = ConfigParams.channels[index].log_save_path
+            # 调用的计算显卡号
+            self.predict_device = ConfigParams.channels[index].predict_device
 
-            #ori设置
-            self.ori_pt1 = conf["ori_info"]["pt1"]
-            self.ori_pt2 = conf["ori_info"]["pt2"]
-            self.ori_pt1_list = [float(self.ori_pt1.split(',')[0]),float(self.ori_pt1.split(',')[1])]
-            self.ori_pt2_list = [float(self.ori_pt2.split(',')[0]),float(self.ori_pt2.split(',')[1])]
-
-            #ui界面设置
+            # ui界面设置
             self.lineEdit.setText(str(self.camera_ip))
             self.lineEdit_2.setText(str(self.camera_port))
             self.lineEdit_3.setText(str(self.camera_user_name))
@@ -129,11 +164,10 @@ class MyApp(QMainWindow, Ui_MainWindow):
             self.lineEdit_8.setText(str(self.module_path))
             self.lineEdit_9.setText(str(self.img_save_folder_path))
 
-            self.doubleSpinBox_4.setValue(self.ori_pt1_list[0])
-            self.doubleSpinBox_5.setValue(self.ori_pt1_list[1])
-            self.doubleSpinBox_2.setValue(self.ori_pt2_list[0])
-            self.doubleSpinBox_3.setValue(self.ori_pt2_list[1])
-
+            self.doubleSpinBox_4.setValue(self.ori_pt1[0])
+            self.doubleSpinBox_5.setValue(self.ori_pt1[1])
+            self.doubleSpinBox_2.setValue(self.ori_pt2[0])
+            self.doubleSpinBox_3.setValue(self.ori_pt2[1])
             return True
         except Exception as e:
             print(e)
@@ -153,147 +187,220 @@ class MyApp(QMainWindow, Ui_MainWindow):
     def quit_img_thread(self):
         self.ai_deal_thread.quit_thread()
 
-    # 文件检测
+    # 文件检测回调
     def recall_files_full_checking(self, res):
         print(res, "文件数量过多，自动清理部分旧文件")
 
-    # PLC输入口状态同步
-    def recall_plc_syn(self, infos:dict):
-        # IO模块状态检测
-        if infos["plc_sts"]:
-            self.tcp_server.io_sts = 0
-            self.label_5.setStyleSheet("color: white; background-color: Green ")
-            self.is_in = infos["holding_register"][0] #记录全局状态
+    # ui界面自动刷新回调
+    def recall_ui_auto_fresh(self, res):
+        # 同步ui plc输入状态
+        if self.is_in:
+            self.label_input_sts.setStyleSheet("color: white; background-color: Red ")
         else:
-            self.tcp_server.io_sts = 7
-            self.label_5.setStyleSheet("color: white; background-color: Red ")
-            self.is_in = False #记录全局状态
+            self.label_input_sts.setStyleSheet("color: white; background-color: Green ")
+        # 同步ui plc输出信号
+        if self.is_out:
+            self.label_output_sts.setStyleSheet("color: white; background-color: Red ")
+        else:
+            self.label_output_sts.setStyleSheet(
+                "color: white; background-color: Green "
+            )
 
-    # 图像回调
-    def recall_show_img(self, pixs):
-        self.image_fresh_time = time.time()
-        self.tcp_server.img_info = pixs #将图像同步至服务器
-        if pixs[0] is not None:
-            self.img = pixs[0]
-            #cv2.Mat转QPixmap
-            img = cv2.cvtColor(pixs[0], cv2.COLOR_BGR2RGB)
+        # 同步plc modbus tcp服务器连接状态
+        if self.tcp_server.io_sts == 0:
+            self.label_io_sts.setStyleSheet("color: white; background-color: Green ")
+        else:
+            self.label_io_sts.setStyleSheet("color: white; background-color: Red ")
+        # 同步相机连接状态
+        if self.tcp_server.camera_sts == 0:
+            self.label_camera_sts.setStyleSheet(
+                "color: white; background-color: Green "
+            )
+        else:
+            self.label_camera_sts.setStyleSheet("color: white; background-color: Red ")
+
+        # 同步fps
+        self.label_fps.setText("FPS:{:.1f}".format(self.fps))
+
+        # 处理图像显示
+        # cv2.Mat转QPixmap
+        if self.img is not None:
+            img = cv2.cvtColor(self.img, cv2.COLOR_BGR2RGB)
             height, width, depth = img.shape
             img = QImage(
                 img.data, width, height, width * depth, QImage.Format.Format_RGB888
-        )
-            ratio = 0.5  # 图片尺寸变换比例
-            img = img.scaled(int(img.width() * ratio), int(img.height() * ratio))
-            self.label.setPixmap(QPixmap(img))
-            self.label.setScaledContents(True)
-        if pixs[1] is not None:
-            self.ori_img = pixs[1]
-
-    # 判定信息回调
-    def recall_show_info(self, infos: dict):
-        #通用设置
-        current_time = time.time() # 当前时间记录
-        # 帧率显示
-        el_time = current_time - self.last_update_time
-        if el_time:
-            fps = 1 / el_time
-        else:
-            fps = 0
-        self.label_2.setText("{:.1f}".format(fps))
-        self.last_update_time = current_time
-
-
-        # 堆叠判定
-        is_stack = False
-        is_handle_check = False
-        if infos["is_stack"]:
-            self.stack_last_time = time.time()
-            self.label_3.setText("是")
-            self.label_3.setStyleSheet("color: white; background-color: Red ")
-            is_stack = True
-        else:
-            self.label_3.setText("否")
-            self.label_3.setStyleSheet("color: white; background-color: Green ")
-            is_stack = False
-
-        # 人工检板判定
-        if infos["is_handle_check"]:
-            self.handle_check_last_time = time.time()
-            is_handle_check = True
-            self.label_6.setText("是")
-            self.label_6.setStyleSheet("color: white; background-color: Red ")
-        else:
-            is_handle_check = False
-            self.label_6.setText("否")
-            self.label_6.setStyleSheet("color: white; background-color: Green ")
-
-        # 调试信息输出
-        self.statusbar.showMessage(
-            "测试信息 板宽：{:.1f}px  板高：{:.1f}px  人工检板：{}  堆叠判定：{}".format(
-                infos["board_width"],
-                infos["board_height"],
-                infos["is_handle_check"],
-                infos["is_stack"],
             )
-        )
+            ratio = 0.5  # 图片尺寸变换比例 显示图片用
+            img = img.scaled(int(img.width() * ratio), int(img.height() * ratio))
+            self.label_img1_show.setPixmap(QPixmap(img))
+            self.label_img1_show.setScaledContents(True)
 
-        #信号输出
-        if is_stack or (current_time - self.stack_last_time < 5):
-            is_out = True
-            self.label_7.setText("是")
-            self.label_7.setStyleSheet("color: white; background-color: Red ")
+        # 信息传输给父进程
+        if self.img_que is not None and self.img is not None:
+            if self.img_que.full():
+                _ = self.img_que.get()
+            self.img_que.put(self.img)
+        if self.info_que is not None and self.ai_recall_info is not None:
+            if self.info_que.full():
+                _ = self.info_que.get()
+            self.info_que.put(
+                [
+                    self.tcp_server.camera_sts,
+                    self.tcp_server.io_sts,
+                    self.fps,
+                    self.is_stack,
+                    self.ai_recall_info["is_stack"],
+                    self.is_handle_check,
+                    self.ai_recall_info["is_handle_check"],
+                    self.is_in,
+                    self.is_out,
+                ]
+            )
+
+        # 图像信息显示
+        if self.is_stack:
+            self.label_body_num.setStyleSheet("color: white; background-color: Red ")
         else:
-            is_out = False
-            self.label_7.setText("否")
-            self.label_7.setStyleSheet("color: white; background-color: Green ")
-            
-        # 输出信号变化或者是距离上次更新信号的时间过去了1s 向plc下达一次指令并保存图像
-        if (is_out != self.last_output_type) or (current_time - self.last_output_time) > 1:
-            self.last_output_time = current_time
-            # 存在信号判定输出
-            task = threading.Thread(target=self.modbus_controller.write_holding_register,args=(5, is_out+10,))
-            task.start()
+            self.label_body_num.setStyleSheet("color: white; background-color: Green ")
+        if self.is_handle_check:
+            self.label_arclight_num.setStyleSheet(
+                "color: white; background-color: Red "
+            )
+        else:
+            self.label_arclight_num.setStyleSheet(
+                "color: white; background-color: Green "
+            )
+        if self.ai_recall_info is not None:
+            # ui界面调试信息显示
+            self.statusbar.showMessage(
+                "测试信息 叠板判定：{} 人检判定：{}  输出信号：{}".format(
+                    self.ai_recall_info["is_stack"],
+                    self.ai_recall_info["is_handle_check"],
+                    self.is_out,
+                )
+            )
 
-        # 输出信号变化日志记录 只有信号变化时记录日志
-        if is_out != self.last_output_type:
-            self.last_output_type = is_out
-            self.logger.info("is_out " + str(is_out))
+    # PLC输入输出口状态同步
+    def recall_plc_syn(self, infos: dict):
+        # 同步输出信号至plc
+        self.modbus_controller.out = self.is_out
+        # 同步输入信号至类变量
+        self.is_in = infos["holding_register"][0]
+        # 同步ui plc连接状态
+        if infos["plc_sts"]:
+            self.tcp_server.io_sts = 0  # 状态同步类变量
+        else:
+            self.tcp_server.io_sts = 7  # 状态同步类变量
 
-            file_name_attach = "change_"+str(is_stack)+"_"
-            self.img_save(self.img, self.ori_img, self.img_save_folder_path, file_name_attach)
-
-    # ai分析线程状态信息回调
+    # ai分析线程 相机状态同步
     def recall_ai_sts_info(self, ai_sts_info: tuple):
         if ai_sts_info[0] == 1 or ai_sts_info[0] == 2:
             self.tcp_server.camera_sts = 0
-            self.label_4.setStyleSheet("color: white; background-color: Green ")
         else:
             self.tcp_server.camera_sts = 7
-            self.label_4.setStyleSheet("color: white; background-color: Red ")
 
-    #图像记录
-    def img_save(self, img, ori_img, folder_path:str, file_name_attach:str = ""):
-        full_path = folder_path + "\\" + file_name_attach + str(int(time.time()*1000))+".jpg"
-        ori_full_path = folder_path + "\\" + file_name_attach + str(int(time.time()*1000))+"_ori.jpg"
-        #保存图像
+    # 图像记录
+    def img_save(self, img, ori_img, folder_path: str, file_name_attach: str = ""):
+        full_path = (
+            folder_path
+            + "\\"
+            + file_name_attach
+            + str(int(time.time() * 1000))
+            + ".jpg"
+        )
+        ori_full_path = (
+            folder_path
+            + "\\"
+            + file_name_attach
+            + str(int(time.time() * 1000))
+            + "_ori.jpg"
+        )
+        # 保存图像
         if img is not None:
             cv2.imwrite(full_path, img)
             cv2.imwrite(ori_full_path, ori_img)
 
-    #软件退出清理
+    # 软件退出清理
     def closeEvent(self, event):
         """
         重写closeEvent方法，实现dialog窗体关闭时执行一些代码
         :param event: close()触发的事件
         :return: None
         """
-        self.quit_img_thread()#退出取图线程
+        self.quit_img_thread()  # 退出取图线程
         event.accept()
-        
-def main():
+
+    # ai处理图像回调
+    def recall_show_img(self, pixs):
+        current_time = time.time()  # 当前时间记录
+        # 图像帧率计算
+        el_time = current_time - self.last_update_time
+        self.last_update_time = current_time
+        if el_time:
+            fps = 1 / el_time
+        else:
+            fps = 0
+        self.fps = fps  # 同步fps至类变量
+
+        self.tcp_server.img_info = pixs  # 将图像同步至服务器
+        WebService.img_info = pixs  # 将图像同步至Web端
+
+        self.img = pixs[0]
+        self.ori_img = pixs[1]
+
+    # ai处理判定信息回调
+    def recall_show_info(self, infos: dict):
+        self.ai_recall_info = infos
+        # 同步信息至Web端
+        WebService.text_info = infos
+        current_time = time.time()  # 当前时间记录
+
+        # Ai叠板判定
+        # 叠板判定判定
+        if infos["is_stack"]:
+            self.is_stack = True
+            self.last_is_stack_info = {
+                "stamp": current_time,
+            }  # 记录最近一次有人的帧信息
+        # 本帧图像未叠板并且距离最近出现人的时间超过了x秒
+        elif current_time - self.last_is_stack_info["stamp"] > 2:
+            self.is_stack = False
+
+        # 人检存在判定
+        if infos["is_handle_check"]:
+            self.is_handle_check = True
+            self.last_is_handle_check_info = {
+                "stamp": current_time
+            }  # 记录最近一次有人检的帧信息
+        elif current_time - self.last_is_handle_check_info["stamp"] > 2:
+            self.is_handle_check = False
+
+        # 输出信号
+        is_out = self.is_stack
+        self.is_out = is_out  # 同步全局信号
+
+        # 异常图像记录
+        if (
+            self.is_out and self.img_save_lock == False
+        ):  # 输入为True并且图像保存锁定为False
+            self.img_save_lock = True
+            file_name_attach = "in_{}_".format(str(is_out))
+            self.img_save(
+                self.img, self.ori_img, self.img_save_folder_path, file_name_attach
+            )
+            self.record_img_info = {
+                "stamp": current_time,
+            }
+        elif self.is_stack == False:
+            self.img_save_lock = False
+
+
+def main(channel_index=0, img_que=None, info_que=None):
     app = QApplication(sys.argv)
-    myapp = MyApp()
+    myapp = MyApp(channel_index, img_que, info_que)
     myapp.show()
     sys.exit(app.exec_())
+
 
 if __name__ == "__main__":
     main()

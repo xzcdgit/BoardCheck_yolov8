@@ -1,8 +1,10 @@
+# 该模块主要用于定期检查图像记录功能保存的图像数量，及时删除老旧文件，防止硬盘空间溢出
+
+
 import time
 import os
 from PyQt5.QtCore import QThread, pyqtSignal
 
-#看门狗模块主要功能是定期检测检测历史记录文件夹的大小
 class StdDog(QThread):
     infoSignal = pyqtSignal(dict)
     last_clean_time = 0
@@ -39,7 +41,10 @@ class StdDog(QThread):
             extra_num = files_num-max_num
             if extra_num > 0:
                 for file in files:
-                    os.remove(folder_path + "\\" + file)
+                    try:
+                        os.remove(folder_path + "\\" + file)
+                    except Exception as e:
+                        continue
                     extra_num -= 1
                     if extra_num < 0:
                         break
