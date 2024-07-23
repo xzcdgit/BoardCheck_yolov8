@@ -31,11 +31,13 @@ class OriParam:
         
 class WebParam:
     def __init__(self) -> None:
+        self.enable = False
         self.ip = None
         self.port = None
         
 class TcpParam:
     def __init__(self) -> None:
+        self.enable = False
         self.ip = None
         self.port = None
 
@@ -44,9 +46,6 @@ channels = [ChannelParam() for i in range(8)]
 channels[0].modle_path = r'D:\Code\Python\BoardCheck_yolov8\best_n.pt'
 channels[0].img_save_path = r'D:\Code\Python\BoardCheck_yolov8\imgs'
 channels[0].log_save_path = r'D:\Code\Python\BoardCheck_yolov8\imgs\log1.txt'
-#channels[0].modle_path = r'D:\Code\Python\BoardCheck_yolov8\best_n.pt'
-#channels[0].img_save_path = r'D:\Code\Python\BoardCheck_yolov8\imgs'
-#channels[0].log_save_path = r'D:\Code\Python\BoardCheck_yolov8\imgs\log1.txt'
 channels[0].predict_device = 0
 
 channels[0].camera.ip = '192.168.31.64'
@@ -58,8 +57,10 @@ channels[0].io.port = 502
 channels[0].io.timeout = 0.1
 channels[0].ori.pt1 = [0, 0]
 channels[0].ori.pt2 = [1, 1]
+channels[0].web.enable = False
 channels[0].web.ip = '0.0.0.0'
 channels[0].web.port = 8200
+channels[0].tcp.enable = False
 channels[0].tcp.ip = ''
 channels[0].tcp.port = 5000
         

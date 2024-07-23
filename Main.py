@@ -39,17 +39,15 @@ class MyApp(QMainWindow, Ui_MainWindow):
         self.img_save_lock = False  # 图像保存锁定
         self.last_update_time = time.time()  # 上次数据更新时间
         self.fps = 0  # fps记录
+        self.connect_info = {'camera':1, 'plc':1}
 
         self.is_stack = False
         self.is_handle_check = False
         self.ai_recall_info = None
 
         self.record_img_info = {"stamp": 0}  # 上次记录图像的时间
-        self.last_is_stack_info = {
-            "stamp": 0,
-        }  # 最近一次叠板记录
-        self.last_is_stack_info = {"stamp": 0}  # 最近一次出现叠板的信息
-        self.last_is_handle_check_info = {"stamp": 0}  # 最近一次出现叠板的信息
+        self.last_is_stack_info = {"stamp": 0}  # 最近一次叠板记录
+        self.last_is_handle_check_info = {"stamp": 0}  #
 
         # 获取预设参数
         res = self.init_params()
@@ -75,23 +73,11 @@ class MyApp(QMainWindow, Ui_MainWindow):
         self.ai_deal_thread.imgSignal.connect(self.recall_show_img)
         self.ai_deal_thread.infoSignal.connect(self.recall_show_info)
         self.ai_deal_thread.finishSignal.connect(self.recall_ai_sts_info)
-        # 设置tcpserver模块
-        self.tcp_server = StsServer.SpeTcpServer(
-            self.tcp_server_ip, self.tcp_server_port
-        )
-        self.tcp_server.start()
         # 设置文件自动清理线程
         self.file_auto_clean = FilesClean.StdDog()
         self.file_auto_clean.param_set(self.img_save_folder_path, 10000)
         self.file_auto_clean.infoSignal.connect(self.recall_files_full_checking)
         self.file_auto_clean.start()
-        # 设置网页端线程
-        self.web_service = WebService.main
-        self.web_threading = threading.Thread(
-            target=self.web_service, args=(self.web_service_ip, self.web_service_port)
-        )
-        self.web_threading.daemon = True
-        self.web_threading.start()
         # 连接ui按钮信号
         self.connect_ui_signal()
         # 初始化log模块设置
@@ -100,6 +86,21 @@ class MyApp(QMainWindow, Ui_MainWindow):
         self.ui_auto_fresh = UiAutoFresh()
         self.ui_auto_fresh.infoSignal.connect(self.recall_ui_auto_fresh)
         self.ui_auto_fresh.start()
+
+        # 设置网页端线程
+        if self.web_service_enable:
+            self.web_service = WebService.main
+            self.web_threading = threading.Thread(
+                target=self.web_service, args=(self.web_service_ip, self.web_service_port)
+            )
+            self.web_threading.daemon = True
+            self.web_threading.start()
+        # 设置tcpserver模块
+        if self.tcp_server_enable:
+            self.tcp_server = StsServer.SpeTcpServer(
+                self.tcp_server_ip, self.tcp_server_port
+            )
+            self.tcp_server.start()
 
         # 自启动设置
         if self.ai_deal_thread.get_is_run() == False:
@@ -138,9 +139,11 @@ class MyApp(QMainWindow, Ui_MainWindow):
             self.io_module_port = ConfigParams.channels[index].io.port
             self.io_module_timeout = ConfigParams.channels[index].io.timeout
             # web模块设置
+            self.web_service_enable = ConfigParams.channels[index].web.enable
             self.web_service_ip = ConfigParams.channels[index].web.ip
             self.web_service_port = ConfigParams.channels[index].web.port
             # tcp模块设置
+            self.tcp_server_enable = ConfigParams.channels[index].tcp.enable
             self.tcp_server_ip = ConfigParams.channels[index].tcp.ip
             self.tcp_server_port = ConfigParams.channels[index].tcp.port
             # ori设置
@@ -207,12 +210,12 @@ class MyApp(QMainWindow, Ui_MainWindow):
             )
 
         # 同步plc modbus tcp服务器连接状态
-        if self.tcp_server.io_sts == 0:
+        if self.connect_info['plc'] == 0:
             self.label_io_sts.setStyleSheet("color: white; background-color: Green ")
         else:
             self.label_io_sts.setStyleSheet("color: white; background-color: Red ")
         # 同步相机连接状态
-        if self.tcp_server.camera_sts == 0:
+        if self.connect_info['camera'] == 0:
             self.label_camera_sts.setStyleSheet(
                 "color: white; background-color: Green "
             )
@@ -245,8 +248,8 @@ class MyApp(QMainWindow, Ui_MainWindow):
                 _ = self.info_que.get()
             self.info_que.put(
                 [
-                    self.tcp_server.camera_sts,
-                    self.tcp_server.io_sts,
+                    self.connect_info['camera'],
+                    self.connect_info['plc'],
                     self.fps,
                     self.is_stack,
                     self.ai_recall_info["is_stack"],
@@ -279,6 +282,15 @@ class MyApp(QMainWindow, Ui_MainWindow):
                     self.is_out,
                 )
             )
+        # web端和tcp service 信息同步
+        if self.web_service_enable:
+            WebService.text_info = self.ai_recall_info
+            WebService.img_info = self.img
+        if self.tcp_server_enable:
+            self.tcp_server.img_info = [self.img, self.ori_img]
+            self.tcp_server.camera_sts = self.connect_info['camera']
+            self.tcp_server.io_sts = self.connect_info['plc']
+            
 
     # PLC输入输出口状态同步
     def recall_plc_syn(self, infos: dict):
@@ -288,16 +300,16 @@ class MyApp(QMainWindow, Ui_MainWindow):
         self.is_in = infos["holding_register"][0]
         # 同步ui plc连接状态
         if infos["plc_sts"]:
-            self.tcp_server.io_sts = 0  # 状态同步类变量
+            self.connect_info['plc'] = 0
         else:
-            self.tcp_server.io_sts = 7  # 状态同步类变量
+            self.connect_info['plc'] = 7
 
     # ai分析线程 相机状态同步
     def recall_ai_sts_info(self, ai_sts_info: tuple):
         if ai_sts_info[0] == 1 or ai_sts_info[0] == 2:
-            self.tcp_server.camera_sts = 0
+            self.connect_info['camera'] = 0
         else:
-            self.tcp_server.camera_sts = 7
+            self.connect_info['camera'] = 7
 
     # 图像记录
     def img_save(self, img, ori_img, folder_path: str, file_name_attach: str = ""):
@@ -341,20 +353,13 @@ class MyApp(QMainWindow, Ui_MainWindow):
         else:
             fps = 0
         self.fps = fps  # 同步fps至类变量
-
-        self.tcp_server.img_info = pixs  # 将图像同步至服务器
-        WebService.img_info = pixs  # 将图像同步至Web端
-
         self.img = pixs[0]
         self.ori_img = pixs[1]
 
     # ai处理判定信息回调
     def recall_show_info(self, infos: dict):
-        self.ai_recall_info = infos
-        # 同步信息至Web端
-        WebService.text_info = infos
         current_time = time.time()  # 当前时间记录
-
+        self.ai_recall_info = infos
         # Ai叠板判定
         # 叠板判定判定
         if infos["is_stack"]:
