@@ -10,7 +10,7 @@ import time
 
 class ModbusTcpClientClass(QThread):
     infoSignal = pyqtSignal(dict)
-    connect_sts = False
+    connect_sts = True
     holding_register_val = None
 
     def __init__(
@@ -26,8 +26,9 @@ class ModbusTcpClientClass(QThread):
         self.is_quit = False
         while self.is_quit == False:
             #同步PLC保持寄存器状态
-            self.connect_sts, self.holding_register_val = self.read_holding_register(10, 2)
-            self.infoSignal.emit({"plc_sts":self.connect_sts,"holding_register":self.holding_register_val})
+            self.connect_sts, self.holding_register_val = self.read_holding_register(0, 4)
+            res = self.analog_trans(self.holding_register_val[2])
+            self.infoSignal.emit({"plc_sts":self.connect_sts,"holding_register":self.holding_register_val,"thickness":res})
             self.write_holding_register(5, self.out+10) #写入数据
             if self.connect_sts:
                 time.sleep(0.01)
@@ -77,6 +78,14 @@ class ModbusTcpClientClass(QThread):
         except Exception as e:
             self.connect_sts = False
             return False, ""
+        
+    def analog_trans(self, data):
+        if data <13734:
+            val = data/13734*280-140
+        else:
+            val = -1
+        return val
+
 
     def close(self):
         self.is_quit = True

@@ -39,11 +39,14 @@ class MyApp(QMainWindow, Ui_MainWindow):
         self.img_save_lock = False  # 图像保存锁定
         self.last_update_time = time.time()  # 上次数据更新时间
         self.fps = 0  # fps记录
-        self.connect_info = {'camera':1, 'plc':1}
+        self.connect_info = {"camera": 1, "plc": 1}
 
         self.is_stack = False
         self.is_handle_check = False
         self.ai_recall_info = None
+        self.board_thickness = -1
+        self.board_width = -1
+        self.board_height = -1
 
         self.record_img_info = {"stamp": 0}  # 上次记录图像的时间
         self.last_is_stack_info = {"stamp": 0}  # 最近一次叠板记录
@@ -91,7 +94,8 @@ class MyApp(QMainWindow, Ui_MainWindow):
         if self.web_service_enable:
             self.web_service = WebService.main
             self.web_threading = threading.Thread(
-                target=self.web_service, args=(self.web_service_ip, self.web_service_port)
+                target=self.web_service,
+                args=(self.web_service_ip, self.web_service_port),
             )
             self.web_threading.daemon = True
             self.web_threading.start()
@@ -210,12 +214,12 @@ class MyApp(QMainWindow, Ui_MainWindow):
             )
 
         # 同步plc modbus tcp服务器连接状态
-        if self.connect_info['plc'] == 0:
+        if self.connect_info["plc"] == 0:
             self.label_io_sts.setStyleSheet("color: white; background-color: Green ")
         else:
             self.label_io_sts.setStyleSheet("color: white; background-color: Red ")
         # 同步相机连接状态
-        if self.connect_info['camera'] == 0:
+        if self.connect_info["camera"] == 0:
             self.label_camera_sts.setStyleSheet(
                 "color: white; background-color: Green "
             )
@@ -224,6 +228,13 @@ class MyApp(QMainWindow, Ui_MainWindow):
 
         # 同步fps
         self.label_fps.setText("FPS:{:.1f}".format(self.fps))
+
+        # 同步板材尺寸
+        self.label_board_size.setText(
+            "板材尺寸：宽度:{:.2f} px  高度:{:.2f} px  厚度:{:.2f} mm".format(
+                self.board_width, self.board_height, self.board_thickness
+            )
+        )
 
         # 处理图像显示
         # cv2.Mat转QPixmap
@@ -248,8 +259,8 @@ class MyApp(QMainWindow, Ui_MainWindow):
                 _ = self.info_que.get()
             self.info_que.put(
                 [
-                    self.connect_info['camera'],
-                    self.connect_info['plc'],
+                    self.connect_info["camera"],
+                    self.connect_info["plc"],
                     self.fps,
                     self.is_stack,
                     self.ai_recall_info["is_stack"],
@@ -288,28 +299,28 @@ class MyApp(QMainWindow, Ui_MainWindow):
             WebService.img_info = self.img
         if self.tcp_server_enable:
             self.tcp_server.img_info = [self.img, self.ori_img]
-            self.tcp_server.camera_sts = self.connect_info['camera']
-            self.tcp_server.io_sts = self.connect_info['plc']
-            
+            self.tcp_server.camera_sts = self.connect_info["camera"]
+            self.tcp_server.io_sts = self.connect_info["plc"]
 
     # PLC输入输出口状态同步
     def recall_plc_syn(self, infos: dict):
+        self.board_thickness = infos["thickness"]
         # 同步输出信号至plc
         self.modbus_controller.out = self.is_out
         # 同步输入信号至类变量
         self.is_in = infos["holding_register"][0]
         # 同步ui plc连接状态
         if infos["plc_sts"]:
-            self.connect_info['plc'] = 0
+            self.connect_info["plc"] = 0
         else:
-            self.connect_info['plc'] = 7
+            self.connect_info["plc"] = 7
 
     # ai分析线程 相机状态同步
     def recall_ai_sts_info(self, ai_sts_info: tuple):
         if ai_sts_info[0] == 1 or ai_sts_info[0] == 2:
-            self.connect_info['camera'] = 0
+            self.connect_info["camera"] = 0
         else:
-            self.connect_info['camera'] = 7
+            self.connect_info["camera"] = 7
 
     # 图像记录
     def img_save(self, img, ori_img, folder_path: str, file_name_attach: str = ""):
@@ -360,6 +371,8 @@ class MyApp(QMainWindow, Ui_MainWindow):
     def recall_show_info(self, infos: dict):
         current_time = time.time()  # 当前时间记录
         self.ai_recall_info = infos
+        self.board_width = infos['board_width']
+        self.board_height = infos['board_height']
         # Ai叠板判定
         # 叠板判定判定
         if infos["is_stack"]:
@@ -381,7 +394,11 @@ class MyApp(QMainWindow, Ui_MainWindow):
             self.is_handle_check = False
 
         # 输出信号
-        is_out = self.is_stack
+        if self.board_thickness > 6.7:
+            is_out = True
+        else:
+            is_out = False
+
         self.is_out = is_out  # 同步全局信号
 
         # 异常图像记录
