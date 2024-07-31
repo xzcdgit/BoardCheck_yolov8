@@ -101,8 +101,8 @@ class AiDealThreading(QThread):
         check_left = img_width*0.25
         check_right = img_width*1
         check_up = img_height*0.083
-        cal_left = img_width*0.3
-        cal_right = img_width*0.7
+        cal_left = img_width*0.25
+        cal_right = img_width*0.5
         input_img = img
         results = self.model.predict(input_img, conf=0.4, verbose=False, device=self.predict_device)
         # 因为只传入了一张图所以results的长度只有1，该循环只会运行一次
@@ -122,7 +122,7 @@ class AiDealThreading(QThread):
                         if index<box_num-1:
                             #两板中心距离小于两板宽度和的一半(如果第二块板位于图像x轴末端，阈值适当减小)
                             if xywhs[index+1][0] > img_width*0.93:
-                                ratio = 0.53
+                                ratio = 0.47
                             else:
                                 ratio = 0.5
                             if (abs(xywhs[index+1][0] - xywhs[index][0]) < ratio*(xywhs[index+1][2] + xywhs[index][2])):
@@ -145,7 +145,6 @@ class AiDealThreading(QThread):
         dt1 = (int(self.ori[0][0]*width),int(self.ori[0][1]*height))
         dt2 = (int(self.ori[1][0]*width-3),int(self.ori[1][1]*height-3))
         img = cv2.rectangle(img,dt1,dt2,(0,255,0),3) 
-        print(board_width, board_height)
         # 回传图像数据和判定结果
         infos = {
             "is_handle_check": is_handle_check,

@@ -40,10 +40,13 @@ class MyApp(QMainWindow, Ui_MainWindow):
         self.last_update_time = time.time()  # 上次数据更新时间
         self.fps = 0  # fps记录
         self.connect_info = {"camera": 1, "plc": 1}
+        self.output_enable = True
 
         self.is_stack = False
         self.is_handle_check = False
         self.ai_recall_info = None
+        self.board_thickness_over_count = 0
+        self.board_thickness_error_time = 0
         self.board_thickness = -1
         self.board_width = -1
         self.board_height = -1
@@ -184,6 +187,11 @@ class MyApp(QMainWindow, Ui_MainWindow):
     def connect_ui_signal(self):
         self.pushButton.clicked.connect(self.start_img_thread)  # 设置图像显示线程
         self.pushButton_2.clicked.connect(self.quit_img_thread)  # 退出图像显示线程
+        self.pushButton_output_enabled.clicked.connect(lambda: self.set_output(True))
+        self.pushButton_output_shield.clicked.connect(lambda: self.set_output(False))
+        
+    def set_output(self, val):
+        self.output_enable = val
 
     # 启动取图线程
     def start_img_thread(self):
@@ -244,8 +252,8 @@ class MyApp(QMainWindow, Ui_MainWindow):
             img = QImage(
                 img.data, width, height, width * depth, QImage.Format.Format_RGB888
             )
-            ratio = 0.5  # 图片尺寸变换比例 显示图片用
-            img = img.scaled(int(img.width() * ratio), int(img.height() * ratio))
+            #ratio = 0.5  # 图片尺寸变换比例 显示图片用
+            #img = img.scaled(int(img.width() * ratio), int(img.height() * ratio))
             self.label_img1_show.setPixmap(QPixmap(img))
             self.label_img1_show.setScaledContents(True)
 
@@ -305,6 +313,18 @@ class MyApp(QMainWindow, Ui_MainWindow):
     # PLC输入输出口状态同步
     def recall_plc_syn(self, infos: dict):
         self.board_thickness = infos["thickness"]
+        #计数
+        if self.board_thickness>6.9:
+            self.board_thickness_over_count += 1
+            if self.board_thickness_over_count>5:
+                self.board_thickness_error_time = time.time()
+                self.board_thickness_error = True
+        elif self.board_thickness<0 and time.time()-self.board_thickness_error_time>3:
+            self.board_thickness_error = False
+            self.board_thickness_over_count = 0
+        #print(self.board_thickness_over_count,self.board_thickness_error_time)
+        
+        
         # 同步输出信号至plc
         self.modbus_controller.out = self.is_out
         # 同步输入信号至类变量
@@ -380,8 +400,8 @@ class MyApp(QMainWindow, Ui_MainWindow):
             self.last_is_stack_info = {
                 "stamp": current_time,
             }  # 记录最近一次有人的帧信息
-        # 本帧图像未叠板并且距离最近出现人的时间超过了x秒
-        elif current_time - self.last_is_stack_info["stamp"] > 2:
+        # 本帧图像未叠板并且距离最近出现叠板的时间超过了x秒
+        elif current_time - self.last_is_stack_info["stamp"] > 5:
             self.is_stack = False
 
         # 人检存在判定
@@ -390,31 +410,33 @@ class MyApp(QMainWindow, Ui_MainWindow):
             self.last_is_handle_check_info = {
                 "stamp": current_time
             }  # 记录最近一次有人检的帧信息
-        elif current_time - self.last_is_handle_check_info["stamp"] > 2:
+        elif current_time - self.last_is_handle_check_info["stamp"] > 5:
             self.is_handle_check = False
-
+            
         # 输出信号
-        if self.board_thickness > 6.7:
-            is_out = True
+        if self.output_enable:
+            if self.board_thickness_error and self.is_stack:
+                self.is_out = True
+            else:
+                self.is_out = False
         else:
-            is_out = False
-
-        self.is_out = is_out  # 同步全局信号
+            self.is_out = False
+        
+        #测试用信息    
+        if self.board_thickness_error or self.is_stack: print(self.board_thickness, self.board_thickness_error, self.is_stack, self.is_out)
 
         # 异常图像记录
-        if (
-            self.is_out and self.img_save_lock == False
-        ):  # 输入为True并且图像保存锁定为False
-            self.img_save_lock = True
-            file_name_attach = "in_{}_".format(str(is_out))
+        if (self.board_thickness_error or self.is_stack) and current_time-self.record_img_info['stamp']>5:  # 输入为True并且图像保存锁定为False
+        #    self.img_save_lock = True
+            file_name_attach = "in_out:{}_stack:{}_thickness:{}".format(str(self.is_out), str(self.is_stack), str(int(self.board_thickness*10)))
             self.img_save(
                 self.img, self.ori_img, self.img_save_folder_path, file_name_attach
             )
             self.record_img_info = {
                 "stamp": current_time,
             }
-        elif self.is_stack == False:
-            self.img_save_lock = False
+        #elif self.is_out == False:
+        #    self.img_save_lock = False
 
 
 def main(channel_index=0, img_que=None, info_que=None):
