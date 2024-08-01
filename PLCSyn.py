@@ -24,7 +24,10 @@ class ModbusTcpClientClass(QThread):
     def run(self):
         # 循环读取主函数
         self.is_quit = False
+        count1 = 0 #心跳计数器1
+        count2 = 0 #心跳计数器2
         while self.is_quit == False:
+            count1 += 1
             #同步PLC保持寄存器状态
             self.connect_sts, self.holding_register_val = self.read_holding_register(0, 4)
             res = self.analog_trans(self.holding_register_val[2])
@@ -35,6 +38,14 @@ class ModbusTcpClientClass(QThread):
             else:
                 time.sleep(2)
                 self.reconnect(0,1)
+            #心跳信号设置
+            if count1 > 3:
+                time.sleep(0.01)
+                count1 = 0
+                count2 += 1
+                self.write_holding_register(0, count2)
+                if count2 > 100:
+                    count2 = 0
         self.is_quit = False
 
     def write_single_coil(self, output_index: int = -1, output_val: bool = False):
